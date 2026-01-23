@@ -84,18 +84,28 @@ export class LiveSession {
   private nextStartTime = 0;
   private sources = new Set<AudioBufferSourceNode>();
   private onMessageCallback: (text: string, isUser: boolean) => void;
+  private onVolumeCallback: (volume: number) => void;
 
-  constructor(onMessage: (text: string, isUser: boolean) => void) {
+  constructor(
+      onMessage: (text: string, isUser: boolean) => void, 
+      onVolume?: (volume: number) => void
+  ) {
     this.onMessageCallback = onMessage;
+    this.onVolumeCallback = onVolume || (() => {});
     this.ai = new GoogleGenAI({ apiKey: API_KEY || '' });
   }
 
   async connect() {
     if (!API_KEY) throw new Error("No API Key");
 
-    this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+    // Use default sample rate (usually 44.1k or 48k) to avoid hardware incompatibility
+    this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
     this.outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     
+    // Resume Audio Contexts to satisfy browser autoplay policies
+    if (this.inputAudioContext.state === 'suspended') await this.inputAudioContext.resume();
+    if (this.outputAudioContext.state === 'suspended') await this.outputAudioContext.resume();
+
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
     const sessionPromise = this.ai.live.connect({
@@ -114,9 +124,16 @@ export class LiveSession {
         speechConfig: {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
         },
-        systemInstruction: 'You are InsightStream AI. You are a video tutor. You can see the video stream and red selection boxes the user draws. When a user selects an area, they expect you to explain what is inside that area immediately or answer their spoken question about it.',
-        inputAudioTranscription: {}, // Enable transcription to show in UI
-        outputAudioTranscription: {},
+        // MULTILINGUAL & INTERACTIVE SYSTEM INSTRUCTION
+        systemInstruction: `You are InsightStream AI. You are a real-time multilingual video tutor. 
+        
+        CRITICAL INSTRUCTIONS:
+        1. **Detect Language**: Automatically detect the language the user is speaking (e.g., English, Chinese/Mandarin, Spanish, French, Japanese) and RESPOND IN THE EXACT SAME LANGUAGE.
+        2. **Vision Aware**: You can see the video stream and red selection boxes the user draws. 
+        3. **Directness**: Answer spoken questions immediately and concisely.
+        4. **Transcription**: Ensure you are understanding the user's speech correctly in their native language.`,
+        inputAudioTranscription: {}, // Critical for User Speech-to-Text
+        outputAudioTranscription: {}, // Critical for Model Speech-to-Text
       },
     });
 
@@ -143,34 +160,75 @@ export class LiveSession {
     if (!this.inputAudioContext) return;
     
     const source = this.inputAudioContext.createMediaStreamSource(stream);
-    // Use ScriptProcessor for demo purposes (AudioWorklet is better for prod but more complex to setup in single file)
-    const scriptProcessor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
+    const processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
     
-    scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-        const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-        const pcmBlob = this.createBlob(inputData);
+    processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        
+        // Calculate Volume for UI
+        let sum = 0;
+        for (let i = 0; i < inputData.length; i++) {
+            sum += inputData[i] * inputData[i];
+        }
+        const rms = Math.sqrt(sum / inputData.length);
+        this.onVolumeCallback(rms);
+
+        // Downsample to 16kHz for Gemini
+        const downsampledData = this.downsampleBuffer(inputData, this.inputAudioContext!.sampleRate, 16000);
+        
+        const pcmBlob = this.createBlob(downsampledData);
         sessionPromise.then((session) => {
             session.sendRealtimeInput({ media: pcmBlob });
         });
     };
 
-    source.connect(scriptProcessor);
-    scriptProcessor.connect(this.inputAudioContext.destination);
+    source.connect(processor);
+    processor.connect(this.inputAudioContext.destination);
+  }
+
+  // Robust Downsampling Function
+  private downsampleBuffer(buffer: Float32Array, sampleRate: number, outSampleRate: number): Float32Array {
+      if (outSampleRate === sampleRate) {
+          return buffer;
+      }
+      if (outSampleRate > sampleRate) {
+          throw new Error("Upsampling not supported");
+      }
+      const sampleRateRatio = sampleRate / outSampleRate;
+      const newLength = Math.round(buffer.length / sampleRateRatio);
+      const result = new Float32Array(newLength);
+      let offsetResult = 0;
+      let offsetBuffer = 0;
+      while (offsetResult < result.length) {
+          const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+          let accum = 0, count = 0;
+          for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+              accum += buffer[i];
+              count++;
+          }
+          result[offsetResult] = count > 0 ? accum / count : 0; // Simple average (low-pass filter effect)
+          offsetResult++;
+          offsetBuffer = nextOffsetBuffer;
+      }
+      return result;
   }
 
   private createBlob(data: Float32Array) {
     const l = data.length;
     const int16 = new Int16Array(l);
     for (let i = 0; i < l; i++) {
-        int16[i] = data[i] * 32768;
+        // Clamp values to [-1, 1] before scaling
+        const val = Math.max(-1, Math.min(1, data[i]));
+        int16[i] = val < 0 ? val * 0x8000 : val * 0x7FFF;
     }
     const uint8 = new Uint8Array(int16.buffer);
     
-    // Manual base64 encode
+    // Efficient chunked base64 encoding to avoid call stack size exceeded
     let binary = '';
-    const len = uint8.byteLength;
-    for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(uint8[i]);
+    const chunkSize = 8192;
+    for (let i = 0; i < uint8.length; i += chunkSize) {
+        const chunk = uint8.subarray(i, i + chunkSize);
+        binary += String.fromCharCode.apply(null, Array.from(chunk));
     }
     const base64 = btoa(binary);
 

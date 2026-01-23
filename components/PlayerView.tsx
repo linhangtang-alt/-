@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { AppView, ChatMessage, SelectionBox, SavedSession } from '../types';
-import { ArrowLeft, MessageSquare, Mic, MicOff, Send, X, BoxSelect, Maximize2, Play, Pause, Settings, Gauge, Volume2, VolumeX, Eraser, Loader2 } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Mic, MicOff, Send, X, BoxSelect, Maximize2, Play, Pause, Settings, Gauge, Volume2, VolumeX, Eraser, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { generateTextResponse, LiveSession, isApiKeyAvailable } from '../services/geminiService';
 
 interface PlayerViewProps {
@@ -44,14 +44,35 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   // Live Voice State
   const [isLiveActive, setIsLiveActive] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [micVolume, setMicVolume] = useState(0);
+  const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null); // null=unknown, true=granted, false=denied
   const liveSessionRef = useRef<LiveSession | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
+
+  // Streaming State refs to prevent closure staleness
+  const currentVoiceMessageIdRef = useRef<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null); 
   const containerRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  // 1. Auto-Request Microphone Permission on Mount
+  useEffect(() => {
+    const requestMic = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // If successful, stop the tracks immediately (we just wanted permission)
+            stream.getTracks().forEach(track => track.stop());
+            setHasMicPermission(true);
+        } catch (err) {
+            console.error("Microphone permission denied:", err);
+            setHasMicPermission(false);
+        }
+    };
+    requestMic();
+  }, []);
 
   // Initialize Video Source - Only when session ID changes (New Video)
   useEffect(() => {
@@ -388,31 +409,82 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       liveSessionRef.current?.disconnect();
       setIsLiveActive(false);
       setIsSpeaking(false);
+      setMicVolume(0);
+      currentVoiceMessageIdRef.current = null;
     } else {
       if (!isApiKeyAvailable()) {
           alert("API Key missing. Cannot start Live mode.");
           return;
       }
-      try {
-        const session = new LiveSession((text, isUser) => {
-            // NOTE: This callback handles real-time transcripts
-            setChatHistory(prev => {
-                // To avoid spamming multiple bubbles for partial transcripts or back-to-back phrases,
-                // we could check the last message. For now, simple append is safest for Demo.
-                return [...prev, {
-                    id: Date.now().toString(),
-                    role: isUser ? 'user' : 'model',
-                    content: text,
-                    timestamp: Date.now(),
-                    isVoice: true
-                }];
-            });
+      
+      // Check permissions again if needed
+      if (hasMicPermission === false) {
+          alert("Microphone permission was denied. Please enable it in browser settings.");
+          return;
+      }
 
-            // Update speaking visualizer based on who communicated last
-            setIsSpeaking(isUser); 
-            // If model responds, after a short while reset speaking state? 
-            // The LiveSession handles audio output separately.
-        });
+      try {
+        const session = new LiveSession(
+            (text, isUser) => {
+                // Streaming Update Logic
+                setChatHistory(prev => {
+                    const currentId = currentVoiceMessageIdRef.current;
+                    
+                    if (currentId) {
+                        const existingMsgIndex = prev.findIndex(m => m.id === currentId);
+                        
+                        // Logic: 
+                        // If it's the SAME turn (User or Model):
+                        // - User Input Transcription: usually "cumulative" (Updates entire sentence) -> Replace
+                        // - Model Output Transcription: usually "chunks" (Deltas) -> Append
+                        // But wait, Gemini Live 'inputTranscription' is cumulative for the turn. 
+                        // 'outputTranscription' is ALSO cumulative chunks or text? 
+                        // Actually, 'outputTranscription' comes as chunks.
+                        // 'inputTranscription' comes as updates.
+                        // We will simplify: Replace for User, Append for Model?
+                        // No, let's treat both as "Update this bubble".
+                        
+                        if (existingMsgIndex !== -1 && prev[existingMsgIndex].role === (isUser ? 'user' : 'model')) {
+                            const newHistory = [...prev];
+                            
+                            if (isUser) {
+                                // User speech: always replace (it's a hypothesis update)
+                                newHistory[existingMsgIndex] = {
+                                    ...newHistory[existingMsgIndex],
+                                    content: text
+                                };
+                            } else {
+                                // Model speech: Chunks. Append if new text, or replace if we get full buffer?
+                                // Gemini Live sends chunks. We must append.
+                                // BUT: If we append blindly, we might duplicate.
+                                // Let's try simple Append for model.
+                                newHistory[existingMsgIndex] = {
+                                    ...newHistory[existingMsgIndex],
+                                    content: newHistory[existingMsgIndex].content + text
+                                };
+                            }
+                            return newHistory;
+                        }
+                    }
+
+                    // Start a new turn / bubble
+                    const newId = Date.now().toString();
+                    currentVoiceMessageIdRef.current = newId;
+                    
+                    return [...prev, {
+                        id: newId,
+                        role: isUser ? 'user' : 'model',
+                        content: text,
+                        timestamp: Date.now(),
+                        isVoice: true
+                    }];
+                });
+                setIsSpeaking(isUser); 
+            },
+            (vol) => {
+                setMicVolume(Math.min(1, vol * 5)); 
+            }
+        );
 
         await session.connect();
         liveSessionRef.current = session;
@@ -425,7 +497,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         frameIntervalRef.current = window.setInterval(captureAndSendFrameToLive, 1000);
       } catch (err) {
         console.error(err);
-        alert("Failed to connect to Gemini Live.");
+        alert("Failed to connect to Gemini Live. Please check console.");
       }
     }
   };
@@ -439,7 +511,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   return (
     <div className="flex h-full bg-slate-900 text-white overflow-hidden">
       {/* Navbar / Back Button */}
-      <div className="absolute top-4 left-4 z-50">
+      <div className="absolute top-4 left-4 z-50 flex items-center gap-3">
         <button 
           onClick={() => onNavigate(AppView.GENERATOR)}
           className="bg-black/50 hover:bg-black/70 p-2 rounded-full text-white backdrop-blur-sm transition flex items-center gap-2 pr-4"
@@ -447,6 +519,29 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
           <ArrowLeft size={20} />
           <span className="text-sm font-medium">History & Upload</span>
         </button>
+        
+        {/* Permission Status Indicator */}
+        <div className={`px-3 py-1.5 rounded-full backdrop-blur-sm border flex items-center gap-2 text-xs font-medium ${
+            hasMicPermission === true 
+            ? 'bg-green-500/20 border-green-500/30 text-green-200' 
+            : hasMicPermission === false 
+            ? 'bg-red-500/20 border-red-500/30 text-red-200'
+            : 'bg-slate-500/20 border-slate-500/30 text-slate-300'
+        }`}>
+            {hasMicPermission === true ? (
+                <>
+                    <CheckCircle2 size={12} className="text-green-400" /> Mic Ready
+                </>
+            ) : hasMicPermission === false ? (
+                <>
+                    <AlertCircle size={12} className="text-red-400" /> Mic Blocked
+                </>
+            ) : (
+                <>
+                    <Loader2 size={12} className="animate-spin" /> Checking Mic...
+                </>
+            )}
+        </div>
       </div>
 
       <canvas ref={canvasRef} className="hidden" />
@@ -496,9 +591,24 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
             )}
 
             {isLiveActive && (
-                <div className="absolute top-4 right-16 z-30 flex items-center gap-2 bg-red-600/80 px-3 py-1 rounded-full animate-pulse">
-                    <div className="w-2 h-2 bg-white rounded-full"></div>
-                    <span className="text-xs font-bold text-white">LIVE VISION ON</span>
+                <div className="absolute top-4 right-16 z-30 flex items-center gap-3 bg-slate-900/80 backdrop-blur px-4 py-2 rounded-full border border-slate-700">
+                    <div className="flex items-center gap-1.5">
+                        <span className="relative flex h-2.5 w-2.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                        </span>
+                        <span className="text-xs font-bold text-white tracking-wide">LIVE</span>
+                    </div>
+                    {/* Mic Visualizer */}
+                    <div className="flex items-end gap-0.5 h-4 w-12">
+                        {[0, 1, 2, 3, 4].map(i => (
+                            <div 
+                                key={i}
+                                className="w-2 bg-brand-500 rounded-sm transition-all duration-75"
+                                style={{ height: `${Math.max(20, Math.min(100, micVolume * 100 * (1 + i/2)))}%` }}
+                            ></div>
+                        ))}
+                    </div>
                 </div>
             )}
           </div>

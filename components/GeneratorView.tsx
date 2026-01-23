@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AgentStage, AgentLog, PipelineStatus, AppView, SavedSession } from '../types';
-import { Video, FileText, Activity, Code, Layers, PlayCircle, CheckCircle2, Circle, UploadCloud, FileVideo, Trash2, FileCheck, Clock, MessageSquare, ChevronRight } from 'lucide-react';
+import { Video, FileText, Activity, Code, Layers, PlayCircle, CheckCircle2, Circle, UploadCloud, FileVideo, Trash2, FileCheck, Clock, MessageSquare, ChevronRight, Settings, Zap, Search } from 'lucide-react';
 
 interface GeneratorViewProps {
   onNavigate: (view: AppView) => void;
@@ -42,6 +42,7 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
   const [logs, setLogs] = useState<AgentLog[]>([]);
   const [activeStage, setActiveStage] = useState<AgentStage | null>(null);
   const [dragActive, setDragActive] = useState(false);
+  const [analysisMode, setAnalysisMode] = useState<'fast' | 'deep'>('fast');
   
   const logsEndRef = useRef<HTMLDivElement>(null);
 
@@ -63,6 +64,7 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
+      setStatus(PipelineStatus.IDLE); // Reset status on new file
     }
   };
 
@@ -82,11 +84,15 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       setFile(e.dataTransfer.files[0]);
+      setStatus(PipelineStatus.IDLE);
     }
   };
 
   const removeFile = () => {
     setFile(null);
+    setStatus(PipelineStatus.IDLE);
+    setLogs([]);
+    setActiveStage(null);
   };
 
   const isVideoFile = file?.type.startsWith('video/');
@@ -95,12 +101,16 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
     if (!file) return;
 
     if (isVideoFile) {
-        // Run a simulated analysis pipeline for video before navigating
         startVideoAnalysis();
     } else {
-        // Document generation mode
         startGeneration();
     }
+  };
+
+  const handleEnterSession = () => {
+      if (file) {
+          onVideoUpload(file);
+      }
   };
 
   const startVideoAnalysis = () => {
@@ -108,23 +118,26 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
       setStatus(PipelineStatus.PROCESSING);
       setLogs([]);
 
+      // Slower, more realistic stages
       const videoStages = [
-          { msg: "Analyzing video codec and container...", delay: 800 },
-          { msg: "Extracting metadata tracks...", delay: 1500 },
-          { msg: "Initializing Gemini 1.5 Pro Vision Model...", delay: 2500 },
-          { msg: "Video ready for interactive analysis.", delay: 3200 }
+          { msg: "Identifying video container (MP4/WebM)...", delay: 1000 },
+          { msg: "Extracting audio track for transcription...", delay: 2000 },
+          { msg: analysisMode === 'deep' ? "Performing Deep Semantic Analysis..." : "Quick Content Scan...", delay: 3500 },
+          { msg: "Generating keyframe thumbnails...", delay: 4500 },
+          { msg: "Initializing Gemini 1.5 Pro Multimodal Context...", delay: 6000 },
+          { msg: "Building Vector Index for Knowledge Graph...", delay: 7500 },
+          { msg: "Session Ready.", delay: 8500 }
       ];
 
       setActiveStage(AgentStage.INGEST);
-      addLog(AgentStage.INGEST, "Starting Video Analysis Pipeline...", "info");
+      addLog(AgentStage.INGEST, `Starting ${analysisMode === 'deep' ? 'Deep' : 'Fast'} Video Analysis...`, "info");
 
       let currentStep = 0;
       const runVideoStep = () => {
           if (currentStep >= videoStages.length) {
-              addLog(AgentStage.INGEST, "Initialization Complete.", "success");
-              setTimeout(() => {
-                  onVideoUpload(file);
-              }, 800);
+              setStatus(PipelineStatus.COMPLETED);
+              setActiveStage(null);
+              addLog(AgentStage.INGEST, "Analysis Complete. Waiting for user...", "success");
               return;
           }
 
@@ -133,7 +146,7 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
               addLog(AgentStage.INGEST, msg, "info");
               currentStep++;
               runVideoStep();
-          }, 800);
+          }, 1000); // Base delay between steps
       };
       
       runVideoStep();
@@ -144,7 +157,6 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
     setStatus(PipelineStatus.PROCESSING);
     setLogs([]);
     
-    // Simulate the Agentic Pipeline described in the docs
     const stages = [
       { stage: AgentStage.INGEST, msg: "Cleaning and normalizing Markdown...", delay: 1000 },
       { stage: AgentStage.KNOWLEDGE, msg: "Building Concept Graph and Glossary...", delay: 2500 },
@@ -160,7 +172,7 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
       if (currentStep >= stages.length) {
         setStatus(PipelineStatus.COMPLETED);
         setActiveStage(null);
-        addLog(AgentStage.RENDER, "Video generation complete! Ready for playback.", 'success');
+        addLog(AgentStage.RENDER, "Video generation complete! Ready.", 'success');
         return;
       }
 
@@ -234,45 +246,91 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
                     </p>
                 </div>
             ) : (
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center gap-3 animate-fade-in relative group">
-                    <div className={`w-12 h-12 rounded-lg flex items-center justify-center shrink-0 ${
-                        isVideoFile ? 'bg-purple-100 text-purple-600' : 'bg-red-100 text-red-600'
-                    }`}>
-                        {isVideoFile ? <FileVideo size={24} /> : <FileText size={24} />}
+                <div className="space-y-4">
+                    {/* File Card */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center gap-3 animate-fade-in relative group">
+                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center shrink-0 ${
+                            isVideoFile ? 'bg-purple-100 text-purple-600' : 'bg-red-100 text-red-600'
+                        }`}>
+                            {isVideoFile ? <FileVideo size={24} /> : <FileText size={24} />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <p className="font-medium text-slate-900 truncate">{file.name}</p>
+                            <p className="text-xs text-slate-500 flex items-center gap-1">
+                                {(file.size / 1024 / 1024).toFixed(2)} MB
+                            </p>
+                        </div>
+                        {status === PipelineStatus.IDLE && (
+                            <button 
+                                onClick={removeFile}
+                                className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                            >
+                                <Trash2 size={18} />
+                            </button>
+                        )}
                     </div>
-                    <div className="flex-1 min-w-0">
-                        <p className="font-medium text-slate-900 truncate">{file.name}</p>
-                        <p className="text-xs text-slate-500 flex items-center gap-1">
-                            {(file.size / 1024 / 1024).toFixed(2)} MB
-                        </p>
-                    </div>
-                    {status !== PipelineStatus.PROCESSING && status !== PipelineStatus.COMPLETED && (
+
+                    {/* Options Panel (Only when IDLE) */}
+                    {status === PipelineStatus.IDLE && isVideoFile && (
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 animate-fade-in">
+                            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1">
+                                <Settings size={12} /> Analysis Configuration
+                            </h3>
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={() => setAnalysisMode('fast')}
+                                    className={`flex-1 py-2 px-2 rounded-lg text-xs font-medium border transition-all flex flex-col items-center gap-1 ${
+                                        analysisMode === 'fast' 
+                                        ? 'bg-white border-brand-500 text-brand-600 shadow-sm' 
+                                        : 'bg-slate-100 border-transparent text-slate-500 hover:bg-white hover:border-slate-300'
+                                    }`}
+                                >
+                                    <Zap size={14} />
+                                    Fast Scan
+                                </button>
+                                <button 
+                                    onClick={() => setAnalysisMode('deep')}
+                                    className={`flex-1 py-2 px-2 rounded-lg text-xs font-medium border transition-all flex flex-col items-center gap-1 ${
+                                        analysisMode === 'deep' 
+                                        ? 'bg-white border-brand-500 text-brand-600 shadow-sm' 
+                                        : 'bg-slate-100 border-transparent text-slate-500 hover:bg-white hover:border-slate-300'
+                                    }`}
+                                >
+                                    <Search size={14} />
+                                    Deep Analysis
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Action Buttons */}
+                    {status === PipelineStatus.COMPLETED ? (
                         <button 
-                            onClick={removeFile}
-                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                            onClick={handleEnterSession}
+                            className="w-full py-3.5 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 hover:shadow-md transition-all flex items-center justify-center gap-2 animate-bounce-short"
                         >
-                            <Trash2 size={18} />
+                            Enter Session <ChevronRight size={18} />
+                        </button>
+                    ) : (
+                        <button 
+                            onClick={handleMainAction}
+                            disabled={status === PipelineStatus.PROCESSING}
+                            className={`w-full py-3.5 rounded-lg font-semibold text-white transition-all shadow-sm flex items-center justify-center gap-2
+                                ${status === PipelineStatus.PROCESSING 
+                                ? 'bg-slate-300 cursor-not-allowed' 
+                                : 'bg-brand-600 hover:bg-brand-700 hover:shadow-md'}`}
+                        >
+                            {status === PipelineStatus.PROCESSING ? (
+                                <>
+                                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                                    Analyzing...
+                                </>
+                            ) : 
+                            isVideoFile ? 'Start Video Analysis' : 'Generate Video'}
                         </button>
                     )}
                 </div>
             )}
-
-            <button 
-              onClick={handleMainAction}
-              disabled={!file || status === PipelineStatus.PROCESSING || status === PipelineStatus.COMPLETED}
-              className={`w-full mt-6 py-3.5 rounded-lg font-semibold text-white transition-all shadow-sm flex items-center justify-center gap-2
-                ${!file || status === PipelineStatus.PROCESSING 
-                  ? 'bg-slate-300 cursor-not-allowed' 
-                  : 'bg-brand-600 hover:bg-brand-700 hover:shadow-md'}`}
-            >
-              {status === PipelineStatus.PROCESSING ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                    Processing...
-                  </>
-              ) : 
-               isVideoFile ? 'Start Video Analysis' : 'Generate Video'}
-            </button>
           </div>
 
           {/* History Section */}
@@ -324,7 +382,7 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
                   {Object.values(AgentStage)
                     .filter(s => s !== AgentStage.ERROR)
                     .map((s) => {
-                      const isCompleted = logs.some(l => l.stage === s && l.message.includes('completed'));
+                      const isCompleted = logs.some(l => l.stage === s && l.message.includes('completed')) || status === PipelineStatus.COMPLETED;
                       const isActive = activeStage === s;
                       return <StageItem key={s} stage={s} isActive={isActive} isCompleted={isCompleted} />;
                   })}
@@ -360,6 +418,11 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
                     }`}>{log.message}</span>
                   </div>
                 ))}
+                {status === PipelineStatus.COMPLETED && (
+                    <div className="mt-4 border-t border-slate-800 pt-4 text-green-400 font-bold animate-pulse">
+                        &gt; SYSTEM READY. PLEASE ENTER SESSION.
+                    </div>
+                )}
                 <div ref={logsEndRef} />
               </div>
             </div>
