@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { AppView, ChatMessage, SelectionBox, SavedSession } from '../types';
-import { ArrowLeft, MessageSquare, Mic, MicOff, Send, X, BoxSelect, Maximize2, Play, Pause, Settings, Gauge, Volume2, VolumeX, Eraser, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Mic, MicOff, Send, X, BoxSelect, Maximize2, Play, Pause, Settings, Gauge, Volume2, VolumeX, Eraser, Loader2, AlertCircle, CheckCircle2, Activity } from 'lucide-react';
 import { generateTextResponse, LiveSession, isApiKeyAvailable } from '../services/geminiService';
 
 interface PlayerViewProps {
@@ -103,10 +103,11 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     const container = chatContainerRef.current;
     if (!container) return;
 
-    if (!userScrolledUp || chatHistory.length <= 1) {
+    // Force scroll if live active or user hasn't scrolled up
+    if (isLiveActive || !userScrolledUp || chatHistory.length <= 1) {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [chatHistory, isLoading, userScrolledUp]);
+  }, [chatHistory, isLoading, userScrolledUp, isLiveActive]);
 
   // Detect manual scroll
   const handleChatScroll = () => {
@@ -424,62 +425,67 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       }
 
       try {
+        // Initialize a placeholder message for the user so they see something immediately
+        const placeholderId = Date.now().toString();
+        currentVoiceMessageIdRef.current = placeholderId;
+        setChatHistory(prev => [...prev, {
+            id: placeholderId,
+            role: 'user',
+            content: "Listening...",
+            timestamp: Date.now(),
+            isVoice: true
+        }]);
+
         const session = new LiveSession(
             (text, isUser) => {
                 // Streaming Update Logic
                 setChatHistory(prev => {
                     const currentId = currentVoiceMessageIdRef.current;
-                    
+                    let newHistory = [...prev];
+
                     if (currentId) {
-                        const existingMsgIndex = prev.findIndex(m => m.id === currentId);
-                        
-                        // Logic: 
-                        // If it's the SAME turn (User or Model):
-                        // - User Input Transcription: usually "cumulative" (Updates entire sentence) -> Replace
-                        // - Model Output Transcription: usually "chunks" (Deltas) -> Append
-                        // But wait, Gemini Live 'inputTranscription' is cumulative for the turn. 
-                        // 'outputTranscription' is ALSO cumulative chunks or text? 
-                        // Actually, 'outputTranscription' comes as chunks.
-                        // 'inputTranscription' comes as updates.
-                        // We will simplify: Replace for User, Append for Model?
-                        // No, let's treat both as "Update this bubble".
-                        
-                        if (existingMsgIndex !== -1 && prev[existingMsgIndex].role === (isUser ? 'user' : 'model')) {
-                            const newHistory = [...prev];
+                        const existingMsgIndex = newHistory.findIndex(m => m.id === currentId);
+
+                        // If we found the message we are currently streaming into
+                        if (existingMsgIndex !== -1 && newHistory[existingMsgIndex].role === (isUser ? 'user' : 'model')) {
+                            const currentMsg = newHistory[existingMsgIndex];
                             
                             if (isUser) {
-                                // User speech: always replace (it's a hypothesis update)
+                                // USER Speech: Gemini sends cumulative updates for the turn (hypotheses)
+                                // Strategy: REPLACE entire content
                                 newHistory[existingMsgIndex] = {
-                                    ...newHistory[existingMsgIndex],
-                                    content: text
+                                    ...currentMsg,
+                                    content: text // Text is the full hypothesis "Hello", then "Hello world"
                                 };
                             } else {
-                                // Model speech: Chunks. Append if new text, or replace if we get full buffer?
-                                // Gemini Live sends chunks. We must append.
-                                // BUT: If we append blindly, we might duplicate.
-                                // Let's try simple Append for model.
+                                // MODEL Speech: Gemini sends chunks
+                                // Strategy: APPEND content
                                 newHistory[existingMsgIndex] = {
-                                    ...newHistory[existingMsgIndex],
-                                    content: newHistory[existingMsgIndex].content + text
+                                    ...currentMsg,
+                                    content: currentMsg.content + text
                                 };
                             }
                             return newHistory;
                         }
                     }
 
-                    // Start a new turn / bubble
+                    // If we didn't find a matching message, or the role switched (e.g., user finished, model started)
+                    // We need to create a NEW bubble.
+                    
                     const newId = Date.now().toString();
                     currentVoiceMessageIdRef.current = newId;
                     
-                    return [...prev, {
+                    return [...newHistory, {
                         id: newId,
                         role: isUser ? 'user' : 'model',
-                        content: text,
+                        content: text, // For user it's full hypothesis, for model it's first chunk
                         timestamp: Date.now(),
                         isVoice: true
                     }];
                 });
-                setIsSpeaking(isUser); 
+                
+                // Keep streaming state active
+                setIsSpeaking(isUser);
             },
             (vol) => {
                 setMicVolume(Math.min(1, vol * 5)); 
@@ -497,6 +503,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         frameIntervalRef.current = window.setInterval(captureAndSendFrameToLive, 1000);
       } catch (err) {
         console.error(err);
+        setChatHistory(prev => prev.filter(m => m.content !== "Listening...")); // Remove placeholder on error
         alert("Failed to connect to Gemini Live. Please check console.");
       }
     }
@@ -693,23 +700,33 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
              
              {chatHistory.map((msg) => (
                <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                 <div className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                 <div className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-relaxed transition-all ${
                    msg.role === 'user' 
                      ? 'bg-brand-600 text-white rounded-br-none' 
                      : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'
-                 }`}>
+                 } ${msg.isVoice ? 'ring-2 ring-brand-400/30' : ''}`}>
                    {msg.isVoice && (
                        <span className="text-[10px] uppercase font-bold tracking-wider opacity-70 mb-1 flex items-center gap-1">
-                           {msg.role === 'user' ? <><Mic size={10}/> You said</> : <><Volume2 size={10}/> AI Spoke</>}
+                           {msg.role === 'user' ? (
+                               <><Activity size={10} className="animate-pulse" /> Live Voice</> 
+                           ) : (
+                               <><Volume2 size={10}/> AI Speaking</>
+                           )}
                        </span>
                    )}
                    <div className="markdown-body">
-                      <ReactMarkdown 
-                        remarkPlugins={[remarkMath]} 
-                        rehypePlugins={[rehypeKatex]}
-                      >
-                        {msg.content}
-                      </ReactMarkdown>
+                      {msg.content === "Listening..." ? (
+                          <div className="flex items-center gap-2 text-white/70 italic">
+                             <span className="animate-pulse">Listening...</span>
+                          </div>
+                      ) : (
+                        <ReactMarkdown 
+                            remarkPlugins={[remarkMath]} 
+                            rehypePlugins={[rehypeKatex]}
+                        >
+                            {msg.content}
+                        </ReactMarkdown>
+                      )}
                    </div>
                  </div>
                </div>
@@ -734,7 +751,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                   onClick={toggleLiveMode}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${
                     isLiveActive 
-                    ? 'bg-red-500/10 text-red-500 border border-red-500/50 hover:bg-red-500/20' 
+                    ? 'bg-red-500/10 text-red-500 border border-red-500/50 hover:bg-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.2)]' 
                     : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
                   }`}
                 >
@@ -744,9 +761,9 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
                             <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
                           </span>
-                          End Voice Session
+                          Stop Voice (Live)
                       </div>
-                  ) : <><Mic size={16} /> Start Voice Chat</>}
+                  ) : <><Mic size={16} /> Real-time Voice (STT)</>}
                 </button>
              </div>
              
@@ -756,7 +773,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                  value={inputText}
                  onChange={(e) => setInputText(e.target.value)}
                  onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                 placeholder={isLiveActive ? "Listening..." : "Type a question..."}
+                 placeholder={isLiveActive ? "Voice Mode Active - Speak now..." : "Type a question..."}
                  className="w-full bg-slate-800 text-white rounded-lg pl-4 pr-12 py-3 text-sm focus:ring-2 focus:ring-brand-500 outline-none placeholder-slate-500"
                  disabled={isLiveActive}
                />
