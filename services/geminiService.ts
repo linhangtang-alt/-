@@ -13,32 +13,58 @@ export const isApiKeyAvailable = (): boolean => {
 export const generateTextResponse = async (
   prompt: string,
   history: ChatMessage[],
-  context?: { selection: any, timestamp: number }
+  context?: { selection: any, timestamp: number, image?: string }
 ): Promise<string> => {
   if (!API_KEY) return "Simulation Mode: API Key missing. Please provide a key to use real Gemini models.";
 
   const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-  // Construct a prompt that includes context if available
-  let fullPrompt = prompt;
+  // Construct content parts
+  const parts: any[] = [];
+
+  // 1. Add Image if available (Multimodal)
+  if (context?.image) {
+    parts.push({
+      inlineData: {
+        mimeType: 'image/jpeg',
+        data: context.image // Base64 string
+      }
+    });
+  }
+
+  // 2. Add Text Prompt with Context Metadata
+  let textPrompt = `[User Question]: ${prompt}`;
+  
   if (context) {
-    fullPrompt = `
-    [Context]
+    textPrompt = `
+    [Context Info]
     Video Timestamp: ${context.timestamp}s
-    User Selection: ${JSON.stringify(context.selection)}
-    The user is asking about a specific part of the educational video.
+    User Selection Coordinates: ${JSON.stringify(context.selection || "None")}
     
-    [User Question]
-    ${prompt}
+    ${textPrompt}
     `;
   }
+  
+  parts.push({ text: textPrompt });
 
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: fullPrompt, 
+      contents: { parts: parts }, 
       config: {
-        systemInstruction: "You are InsightStream AI, an expert educational assistant explaining complex topics in the style of 3blue1brown. Be concise, mathematical where appropriate, and encouraging."
+        systemInstruction: `You are InsightStream AI, an expert educational assistant inspired by 3blue1brown.
+        
+        Guidelines:
+        1. **DIRECT ANSWER ONLY.** Do NOT use greetings, pleasantries, or intro phrases.
+        2. Start directly with the mathematical derivation, concept explanation, or data analysis.
+        3. **FORMATTING IS CRITICAL:**
+           - Use **LaTeX** for ALL mathematical formulas.
+           - Enclose inline formulas with single dollar signs: $ E = mc^2 $
+           - Enclose block formulas with double dollar signs: $$ \\int_{a}^{b} x^2 dx $$
+           - Use **Bold** for key terms.
+           - Use bullet points for steps.
+        4. If the user provides an image with a red box, explain ONLY what is inside that red box.
+        5. Be concise, encouraging, and mathematically precise.`
       }
     });
     return response.text || "I couldn't generate a response.";
@@ -88,13 +114,29 @@ export class LiveSession {
         speechConfig: {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
         },
-        systemInstruction: 'You are InsightStream AI. You are helping a student understand a video visualization. Keep answers short and conversational.',
+        systemInstruction: 'You are InsightStream AI. You are a video tutor. You can see the video stream and red selection boxes the user draws. When a user selects an area, they expect you to explain what is inside that area immediately or answer their spoken question about it.',
         inputAudioTranscription: {}, // Enable transcription to show in UI
         outputAudioTranscription: {},
       },
     });
 
     this.session = sessionPromise;
+  }
+
+  public sendImage(base64Data: string) {
+    if (!this.session) return;
+    this.session.then((session: any) => {
+        try {
+            session.sendRealtimeInput({
+                media: {
+                    mimeType: "image/jpeg",
+                    data: base64Data
+                }
+            });
+        } catch(e) {
+            console.error("Error sending image frame", e);
+        }
+    });
   }
 
   private startAudioStream(stream: MediaStream, sessionPromise: Promise<any>) {

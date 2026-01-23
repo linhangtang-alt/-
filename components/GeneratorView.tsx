@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AgentStage, AgentLog, PipelineStatus, AppView } from '../types';
-import { Video, FileText, Activity, Code, Layers, PlayCircle, CheckCircle2, Circle, UploadCloud, FileVideo } from 'lucide-react';
+import { Video, FileText, Activity, Code, Layers, PlayCircle, CheckCircle2, Circle, UploadCloud, FileVideo, Trash2, FileCheck } from 'lucide-react';
 
 interface GeneratorViewProps {
   onNavigate: (view: AppView) => void;
@@ -39,6 +39,7 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
   const [status, setStatus] = useState<PipelineStatus>(PipelineStatus.IDLE);
   const [logs, setLogs] = useState<AgentLog[]>([]);
   const [activeStage, setActiveStage] = useState<AgentStage | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   
   const logsEndRef = useRef<HTMLDivElement>(null);
 
@@ -63,19 +64,79 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
     }
   };
 
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      setFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const removeFile = () => {
+    setFile(null);
+  };
+
   const isVideoFile = file?.type.startsWith('video/');
 
   const handleMainAction = () => {
     if (!file) return;
 
     if (isVideoFile) {
-        // Direct video analysis mode
-        onVideoUpload(file);
-        onNavigate(AppView.PLAYER);
+        // Run a simulated analysis pipeline for video before navigating
+        startVideoAnalysis();
     } else {
         // Document generation mode
         startGeneration();
     }
+  };
+
+  const startVideoAnalysis = () => {
+      if (!file) return;
+      setStatus(PipelineStatus.PROCESSING);
+      setLogs([]);
+
+      const videoStages = [
+          { msg: "Analyzing video codec and container...", delay: 800 },
+          { msg: "Extracting metadata tracks...", delay: 1500 },
+          { msg: "Initializing Gemini 1.5 Pro Vision Model...", delay: 2500 },
+          { msg: "Video ready for interactive analysis.", delay: 3200 }
+      ];
+
+      // Just reuse INGEST stage for visual consistency as "Ingesting Video"
+      setActiveStage(AgentStage.INGEST);
+      addLog(AgentStage.INGEST, "Starting Video Analysis Pipeline...", "info");
+
+      let currentStep = 0;
+      const runVideoStep = () => {
+          if (currentStep >= videoStages.length) {
+              addLog(AgentStage.INGEST, "Initialization Complete.", "success");
+              setTimeout(() => {
+                  onVideoUpload(file);
+                  onNavigate(AppView.PLAYER);
+              }, 800);
+              return;
+          }
+
+          const { msg, delay } = videoStages[currentStep];
+          setTimeout(() => {
+              addLog(AgentStage.INGEST, msg, "info");
+              currentStep++;
+              runVideoStep();
+          }, 800); // Fixed interval for snappier feel
+      };
+      
+      runVideoStep();
   };
 
   const startGeneration = () => {
@@ -133,7 +194,7 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
           <h1 className="text-3xl font-bold text-slate-900 tracking-tight">InsightStream Studio</h1>
           <p className="text-slate-500 mt-1">Transform documents into visual intuitive videos powered by Gemini & Manim.</p>
         </div>
-        {status === PipelineStatus.COMPLETED && (
+        {status === PipelineStatus.COMPLETED && !isVideoFile && (
           <button 
             onClick={() => onNavigate(AppView.PLAYER)}
             className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white px-6 py-3 rounded-lg font-semibold shadow-lg transition-all transform hover:scale-105"
@@ -148,43 +209,82 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
         
         {/* Left Column: Input */}
         <div className="lg:col-span-1 flex flex-col gap-6">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 h-fit">
             <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
               <UploadCloud size={20} className="text-brand-600"/> Source Material
             </h2>
             
-            <div className="border-2 border-dashed border-slate-300 rounded-lg p-8 flex flex-col items-center justify-center text-center hover:bg-brand-50 transition-colors cursor-pointer relative">
-              <input 
-                type="file" 
-                onChange={handleUpload}
-                disabled={status === PipelineStatus.PROCESSING}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                accept=".md,.pdf,.txt,.mp4,.mov,.webm"
-              />
-              {isVideoFile ? <FileVideo size={40} className="text-brand-500 mb-2" /> : <FileText size={40} className="text-slate-400 mb-2" />}
-              
-              <p className="text-sm text-slate-600 font-medium">
-                {file ? file.name : "Drag & Drop Documents or Video"}
-              </p>
-              <p className="text-xs text-slate-400 mt-1">Supports PDF, MD, MP4 (Max 50MB)</p>
-            </div>
+            {/* Upload Area */}
+            {!file ? (
+                <div 
+                    className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer relative ${
+                        dragActive ? 'border-brand-500 bg-brand-50' : 'border-slate-300 hover:bg-slate-50 hover:border-slate-400'
+                    }`}
+                    onDragEnter={handleDrag}
+                    onDragLeave={handleDrag}
+                    onDragOver={handleDrag}
+                    onDrop={handleDrop}
+                >
+                    <input 
+                        type="file" 
+                        onChange={handleUpload}
+                        disabled={status === PipelineStatus.PROCESSING}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                        accept=".md,.pdf,.txt,.mp4,.mov,.webm"
+                    />
+                    <div className="bg-brand-100 p-4 rounded-full mb-3 text-brand-600">
+                        <UploadCloud size={32} />
+                    </div>
+                    
+                    <p className="text-slate-900 font-medium mb-1">
+                        Click or drag file to upload
+                    </p>
+                    <p className="text-xs text-slate-500 max-w-[200px]">
+                        Supports <span className="font-semibold text-slate-700">PDF, MD</span> for generation or <span className="font-semibold text-slate-700">MP4</span> for analysis.
+                    </p>
+                </div>
+            ) : (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center gap-3 animate-fade-in relative group">
+                    <div className={`w-12 h-12 rounded-lg flex items-center justify-center shrink-0 ${
+                        isVideoFile ? 'bg-purple-100 text-purple-600' : 'bg-red-100 text-red-600'
+                    }`}>
+                        {isVideoFile ? <FileVideo size={24} /> : <FileText size={24} />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <p className="font-medium text-slate-900 truncate">{file.name}</p>
+                        <p className="text-xs text-slate-500 flex items-center gap-1">
+                            {(file.size / 1024 / 1024).toFixed(2)} MB • {isVideoFile ? 'Video Analysis' : 'Doc Generation'}
+                        </p>
+                    </div>
+                    {status !== PipelineStatus.PROCESSING && status !== PipelineStatus.COMPLETED && (
+                        <button 
+                            onClick={removeFile}
+                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                        >
+                            <Trash2 size={18} />
+                        </button>
+                    )}
+                </div>
+            )}
 
-            {/* Configuration Form - Only show if not a video or if needed */}
-            <div className={`mt-6 space-y-4 transition-opacity ${isVideoFile ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
+            {/* Configuration Form - Always Active */}
+            <div className="mt-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Target Audience</label>
-                <select className="w-full border border-slate-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none">
+                <select className="w-full border border-slate-300 rounded-md p-2.5 text-sm focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none bg-white">
                   <option>Undergraduate Student</option>
                   <option>High School Student</option>
                   <option>Expert Researcher</option>
+                  <option>General Public</option>
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Visual Style</label>
-                <select className="w-full border border-slate-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none">
+                <label className="block text-sm font-medium text-slate-700 mb-1">Visual Style / Tone</label>
+                <select className="w-full border border-slate-300 rounded-md p-2.5 text-sm focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none bg-white">
                   <option>3blue1brown (Manim)</option>
                   <option>Hand-drawn Sketch</option>
                   <option>Minimalist Geometric</option>
+                  <option>Professional Presentation</option>
                 </select>
               </div>
             </div>
@@ -192,14 +292,24 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
             <button 
               onClick={handleMainAction}
               disabled={!file || status === PipelineStatus.PROCESSING || status === PipelineStatus.COMPLETED}
-              className={`w-full mt-6 py-3 rounded-lg font-semibold text-white transition-all
+              className={`w-full mt-6 py-3.5 rounded-lg font-semibold text-white transition-all shadow-sm flex items-center justify-center gap-2
                 ${!file || status === PipelineStatus.PROCESSING 
                   ? 'bg-slate-300 cursor-not-allowed' 
-                  : 'bg-slate-900 hover:bg-slate-800 shadow-md'}`}
+                  : 'bg-brand-600 hover:bg-brand-700 hover:shadow-md'}`}
             >
-              {status === PipelineStatus.PROCESSING ? 'Agents Working...' : 
-               status === PipelineStatus.COMPLETED ? 'Generated' : 
-               isVideoFile ? 'Analyze Video' : 'Generate Video'}
+              {status === PipelineStatus.PROCESSING ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                    Processing...
+                  </>
+              ) : 
+               status === PipelineStatus.COMPLETED ? (
+                   <>
+                    <CheckCircle2 size={18} />
+                    Generated
+                   </>
+               ) : 
+               isVideoFile ? 'Start Video Analysis' : 'Generate Video'}
             </button>
           </div>
         </div>
