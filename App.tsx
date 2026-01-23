@@ -5,13 +5,20 @@ import PlayerView from './components/PlayerView';
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.GENERATOR);
+  const [uploadedVideo, setUploadedVideo] = useState<File | null>(null);
 
   return (
     <div className="h-full w-full">
       {currentView === AppView.GENERATOR ? (
-        <GeneratorView onNavigate={setCurrentView} />
+        <GeneratorView 
+          onNavigate={setCurrentView} 
+          onVideoUpload={setUploadedVideo}
+        />
       ) : (
-        <PlayerView onNavigate={setCurrentView} />
+        <PlayerView 
+          onNavigate={setCurrentView} 
+          uploadedVideo={uploadedVideo}
+        />
       )}
     </div>
   );

@@ -1,12 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AgentStage, AgentLog, PipelineStatus, AppView } from '../types';
-import { Video, FileText, Activity, Code, Layers, PlayCircle, CheckCircle2, Circle, UploadCloud } from 'lucide-react';
+import { Video, FileText, Activity, Code, Layers, PlayCircle, CheckCircle2, Circle, UploadCloud, FileVideo } from 'lucide-react';
 
 interface GeneratorViewProps {
   onNavigate: (view: AppView) => void;
+  onVideoUpload: (file: File) => void;
 }
 
-const StageItem = ({ stage, isActive, isCompleted }: { stage: AgentStage, isActive: boolean, isCompleted: boolean }) => {
+interface StageItemProps {
+  stage: AgentStage;
+  isActive: boolean;
+  isCompleted: boolean;
+}
+
+const StageItem: React.FC<StageItemProps> = ({ stage, isActive, isCompleted }) => {
   let Icon = Circle;
   if (stage === AgentStage.INGEST) Icon = FileText;
   if (stage === AgentStage.SCRIPT) Icon = Code;
@@ -27,7 +34,7 @@ const StageItem = ({ stage, isActive, isCompleted }: { stage: AgentStage, isActi
   );
 };
 
-const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate }) => {
+const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload }) => {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<PipelineStatus>(PipelineStatus.IDLE);
   const [logs, setLogs] = useState<AgentLog[]>([]);
@@ -53,6 +60,21 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate }) => {
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
+    }
+  };
+
+  const isVideoFile = file?.type.startsWith('video/');
+
+  const handleMainAction = () => {
+    if (!file) return;
+
+    if (isVideoFile) {
+        // Direct video analysis mode
+        onVideoUpload(file);
+        onNavigate(AppView.PLAYER);
+    } else {
+        // Document generation mode
+        startGeneration();
     }
   };
 
@@ -137,17 +159,18 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate }) => {
                 onChange={handleUpload}
                 disabled={status === PipelineStatus.PROCESSING}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                accept=".md,.pdf,.txt"
+                accept=".md,.pdf,.txt,.mp4,.mov,.webm"
               />
-              <FileText size={40} className="text-slate-400 mb-2" />
+              {isVideoFile ? <FileVideo size={40} className="text-brand-500 mb-2" /> : <FileText size={40} className="text-slate-400 mb-2" />}
+              
               <p className="text-sm text-slate-600 font-medium">
-                {file ? file.name : "Drag & Drop PDF or Markdown"}
+                {file ? file.name : "Drag & Drop Documents or Video"}
               </p>
-              <p className="text-xs text-slate-400 mt-1">Limit 50MB</p>
+              <p className="text-xs text-slate-400 mt-1">Supports PDF, MD, MP4 (Max 50MB)</p>
             </div>
 
-            {/* Configuration Form */}
-            <div className="mt-6 space-y-4">
+            {/* Configuration Form - Only show if not a video or if needed */}
+            <div className={`mt-6 space-y-4 transition-opacity ${isVideoFile ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Target Audience</label>
                 <select className="w-full border border-slate-300 rounded-md p-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none">
@@ -167,7 +190,7 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate }) => {
             </div>
 
             <button 
-              onClick={startGeneration}
+              onClick={handleMainAction}
               disabled={!file || status === PipelineStatus.PROCESSING || status === PipelineStatus.COMPLETED}
               className={`w-full mt-6 py-3 rounded-lg font-semibold text-white transition-all
                 ${!file || status === PipelineStatus.PROCESSING 
@@ -175,7 +198,8 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate }) => {
                   : 'bg-slate-900 hover:bg-slate-800 shadow-md'}`}
             >
               {status === PipelineStatus.PROCESSING ? 'Agents Working...' : 
-               status === PipelineStatus.COMPLETED ? 'Generated' : 'Generate Video'}
+               status === PipelineStatus.COMPLETED ? 'Generated' : 
+               isVideoFile ? 'Analyze Video' : 'Generate Video'}
             </button>
           </div>
         </div>

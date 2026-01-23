@@ -5,18 +5,20 @@ import { generateTextResponse, LiveSession, isApiKeyAvailable } from '../service
 
 interface PlayerViewProps {
   onNavigate: (view: AppView) => void;
+  uploadedVideo: File | null;
 }
 
-// Sample video for demo (A creative commons tech/math video would be ideal, using a placeholder)
-const VIDEO_SRC = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"; // Placeholder
+// Default sample video if none is uploaded
+const DEFAULT_VIDEO = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
 
-const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate }) => {
+const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, uploadedVideo }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isDrawing, setIsDrawing] = useState(false);
   const [selection, setSelection] = useState<SelectionBox | null>(null);
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [mode, setMode] = useState<'view' | 'select'>('view');
+  const [videoSrc, setVideoSrc] = useState(DEFAULT_VIDEO);
   
   // Chat State
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
@@ -31,6 +33,17 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Handle uploaded video
+  useEffect(() => {
+    if (uploadedVideo) {
+      const url = URL.createObjectURL(uploadedVideo);
+      setVideoSrc(url);
+      return () => {
+        URL.revokeObjectURL(url);
+      };
+    }
+  }, [uploadedVideo]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -179,7 +192,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate }) => {
           
           <video 
             ref={videoRef}
-            src={VIDEO_SRC}
+            src={videoSrc}
             className="w-full max-h-full object-contain"
             onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
             controls={false} // Custom controls or default
