@@ -31,7 +31,6 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, uploadedVideo }) =>
   
   // Interaction State
   const [isDrawing, setIsDrawing] = useState(false);
-  // Replaced rectangular selection with freehand points
   const [drawingPoints, setDrawingPoints] = useState<Point[]>([]); 
   const [mode, setMode] = useState<'view' | 'draw'>('view');
   
@@ -39,6 +38,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, uploadedVideo }) =>
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [userScrolledUp, setUserScrolledUp] = useState(false);
   
   // Live Voice State
   const [isLiveActive, setIsLiveActive] = useState(false);
@@ -62,12 +62,26 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, uploadedVideo }) =>
     }
   }, [uploadedVideo]);
 
-  // Optimized Auto-scroll chat: Only scroll if we are already near bottom or it's a new message
+  // Intelligent Auto-scroll
   useEffect(() => {
-    if (chatEndRef.current) {
-        chatEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const container = chatContainerRef.current;
+    if (!container) return;
+
+    // Only auto-scroll if the user hasn't manually scrolled up to read history
+    // OR if it's the very first message
+    if (!userScrolledUp || chatHistory.length <= 1) {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [chatHistory, isLoading]);
+  }, [chatHistory, isLoading, userScrolledUp]);
+
+  // Detect manual scroll
+  const handleChatScroll = () => {
+      const container = chatContainerRef.current;
+      if (!container) return;
+      
+      const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
+      setUserScrolledUp(!isAtBottom);
+  };
 
   // Clean up live session on unmount
   useEffect(() => {
@@ -78,10 +92,25 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, uploadedVideo }) =>
   }, []);
 
   // --- Video Controls ---
-  const togglePlay = () => {
+  const togglePlay = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    
+    // Prevent toggling if in drawing mode via video click
+    // We only allow control bar buttons to toggle play in draw mode
+    if (mode === 'draw' && e?.type === 'click' && (e.target as HTMLElement).tagName === 'VIDEO') {
+        return;
+    }
+
     if (videoRef.current) {
-      if (isPlaying) videoRef.current.pause();
-      else videoRef.current.play();
+      if (isPlaying) {
+          videoRef.current.pause();
+      } else {
+          // If we start playing, clear the drawing to unclutter the view
+          if (drawingPoints.length > 0) {
+              setDrawingPoints([]);
+          }
+          videoRef.current.play();
+      }
       setIsPlaying(!isPlaying);
     }
   };
@@ -225,6 +254,9 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, uploadedVideo }) =>
   const handleMouseDown = (e: React.MouseEvent) => {
     if (mode !== 'draw' || !containerRef.current) return;
     
+    // Stop propagation to prevent video click handlers
+    e.stopPropagation(); 
+    
     // Clear previous drawing when starting a new one
     setDrawingPoints([]);
 
@@ -244,6 +276,8 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, uploadedVideo }) =>
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!isDrawing || mode !== 'draw' || !containerRef.current) return;
+    e.stopPropagation();
+    
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -253,9 +287,14 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, uploadedVideo }) =>
 
   const handleMouseUp = async (e: React.MouseEvent) => {
     if (!isDrawing) return;
+    e.stopPropagation();
     setIsDrawing(false);
 
-    // Keep video paused!
+    // CRITICAL: Ensure video stays paused after drawing
+    if (videoRef.current) {
+        videoRef.current.pause();
+        setIsPlaying(false);
+    }
     
     const finalPoints = [...drawingPoints];
     const boundingBox = getBoundingBox(finalPoints);
@@ -263,7 +302,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, uploadedVideo }) =>
     // Only analyze if the path is significant
     if (boundingBox && (boundingBox.width > 20 || boundingBox.height > 20)) {
          await performAutoAnalysis(finalPoints, boundingBox);
-         // NOTE: We do NOT clear drawing points here. They remain visible.
+         // NOTE: We do NOT clear drawing points here. They remain visible for the user to see while reading the answer.
     }
   };
 
@@ -441,8 +480,9 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, uploadedVideo }) =>
             {drawingPoints.length > 0 && (
                 <button 
                 onClick={clearDrawing}
-                className="absolute top-4 right-4 z-30 bg-black/50 hover:bg-black/70 p-2 rounded-full transition text-slate-300 hover:text-white"
+                className="absolute top-4 right-4 z-30 bg-black/50 hover:bg-black/70 p-2 rounded-full transition text-slate-300 hover:text-white pointer-events-auto"
                 title="Clear drawing"
+                onMouseDown={(e) => e.stopPropagation()} // Prevent triggering drawing
                 >
                 <Eraser size={16} />
                 </button>
@@ -535,7 +575,11 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, uploadedVideo }) =>
            </div>
 
            {/* Chat History */}
-           <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-slate-700">
+           <div 
+             ref={chatContainerRef} 
+             onScroll={handleChatScroll}
+             className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-slate-700"
+           >
              {chatHistory.length === 0 && (
                 <div className="text-center text-slate-500 mt-10">
                     <p className="mb-2">👋 Hi! I'm your AI tutor.</p>
