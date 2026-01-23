@@ -231,9 +231,11 @@ export class LiveSession {
   }
 
   disconnect() {
-    // There is no explicit disconnect on the session object in the preview SDK, 
-    // usually handled by closing audio contexts or navigation.
-    if (this.inputAudioContext) this.inputAudioContext.close();
-    if (this.outputAudioContext) this.outputAudioContext.close();
+    if (this.inputAudioContext && this.inputAudioContext.state !== 'closed') {
+      this.inputAudioContext.close();
+    }
+    if (this.outputAudioContext && this.outputAudioContext.state !== 'closed') {
+      this.outputAudioContext.close();
+    }
   }
 }

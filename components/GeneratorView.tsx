@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AgentStage, AgentLog, PipelineStatus, AppView } from '../types';
-import { Video, FileText, Activity, Code, Layers, PlayCircle, CheckCircle2, Circle, UploadCloud, FileVideo, Trash2, FileCheck } from 'lucide-react';
+import { AgentStage, AgentLog, PipelineStatus, AppView, SavedSession } from '../types';
+import { Video, FileText, Activity, Code, Layers, PlayCircle, CheckCircle2, Circle, UploadCloud, FileVideo, Trash2, FileCheck, Clock, MessageSquare, ChevronRight } from 'lucide-react';
 
 interface GeneratorViewProps {
   onNavigate: (view: AppView) => void;
   onVideoUpload: (file: File) => void;
+  history: SavedSession[];
+  onLoadSession: (id: string) => void;
 }
 
 interface StageItemProps {
@@ -34,7 +36,7 @@ const StageItem: React.FC<StageItemProps> = ({ stage, isActive, isCompleted }) =
   );
 };
 
-const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload }) => {
+const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload, history, onLoadSession }) => {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<PipelineStatus>(PipelineStatus.IDLE);
   const [logs, setLogs] = useState<AgentLog[]>([]);
@@ -113,7 +115,6 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
           { msg: "Video ready for interactive analysis.", delay: 3200 }
       ];
 
-      // Just reuse INGEST stage for visual consistency as "Ingesting Video"
       setActiveStage(AgentStage.INGEST);
       addLog(AgentStage.INGEST, "Starting Video Analysis Pipeline...", "info");
 
@@ -123,7 +124,6 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
               addLog(AgentStage.INGEST, "Initialization Complete.", "success");
               setTimeout(() => {
                   onVideoUpload(file);
-                  onNavigate(AppView.PLAYER);
               }, 800);
               return;
           }
@@ -133,7 +133,7 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
               addLog(AgentStage.INGEST, msg, "info");
               currentStep++;
               runVideoStep();
-          }, 800); // Fixed interval for snappier feel
+          }, 800);
       };
       
       runVideoStep();
@@ -170,7 +170,6 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
       
       setTimeout(() => {
         addLog(stage, msg, 'info');
-        // Simulate inner thoughts of agents
         if (stage === AgentStage.MOTION) {
             setTimeout(() => addLog(stage, "Optimizing animation curves...", 'info'), 1000);
         }
@@ -179,8 +178,8 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
           addLog(stage, `Stage ${stage} completed successfully.`, 'success');
           currentStep++;
           runStep();
-        }, 1500); // Duration of the "work"
-      }, 500); // Initial delay
+        }, 1500);
+      }, 500);
     };
 
     runStep();
@@ -194,24 +193,15 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
           <h1 className="text-3xl font-bold text-slate-900 tracking-tight">InsightStream Studio</h1>
           <p className="text-slate-500 mt-1">Transform documents into visual intuitive videos powered by Gemini & Manim.</p>
         </div>
-        {status === PipelineStatus.COMPLETED && !isVideoFile && (
-          <button 
-            onClick={() => onNavigate(AppView.PLAYER)}
-            className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white px-6 py-3 rounded-lg font-semibold shadow-lg transition-all transform hover:scale-105"
-          >
-            <PlayCircle size={20} />
-            Watch Generated Video
-          </button>
-        )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 h-full min-h-0">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 h-full min-h-0">
         
         {/* Left Column: Input */}
         <div className="lg:col-span-1 flex flex-col gap-6">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 h-fit">
             <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-              <UploadCloud size={20} className="text-brand-600"/> Source Material
+              <UploadCloud size={20} className="text-brand-600"/> New Project
             </h2>
             
             {/* Upload Area */}
@@ -237,10 +227,10 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
                     </div>
                     
                     <p className="text-slate-900 font-medium mb-1">
-                        Click or drag file to upload
+                        Click or drag file
                     </p>
                     <p className="text-xs text-slate-500 max-w-[200px]">
-                        Supports <span className="font-semibold text-slate-700">PDF, MD</span> for generation or <span className="font-semibold text-slate-700">MP4</span> for analysis.
+                        Supports <span className="font-semibold text-slate-700">PDF, MD</span> or <span className="font-semibold text-slate-700">MP4</span>.
                     </p>
                 </div>
             ) : (
@@ -253,7 +243,7 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
                     <div className="flex-1 min-w-0">
                         <p className="font-medium text-slate-900 truncate">{file.name}</p>
                         <p className="text-xs text-slate-500 flex items-center gap-1">
-                            {(file.size / 1024 / 1024).toFixed(2)} MB • {isVideoFile ? 'Video Analysis' : 'Doc Generation'}
+                            {(file.size / 1024 / 1024).toFixed(2)} MB
                         </p>
                     </div>
                     {status !== PipelineStatus.PROCESSING && status !== PipelineStatus.COMPLETED && (
@@ -266,28 +256,6 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
                     )}
                 </div>
             )}
-
-            {/* Configuration Form - Always Active */}
-            <div className="mt-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Target Audience</label>
-                <select className="w-full border border-slate-300 rounded-md p-2.5 text-sm focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none bg-white">
-                  <option>Undergraduate Student</option>
-                  <option>High School Student</option>
-                  <option>Expert Researcher</option>
-                  <option>General Public</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Visual Style / Tone</label>
-                <select className="w-full border border-slate-300 rounded-md p-2.5 text-sm focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none bg-white">
-                  <option>3blue1brown (Manim)</option>
-                  <option>Hand-drawn Sketch</option>
-                  <option>Minimalist Geometric</option>
-                  <option>Professional Presentation</option>
-                </select>
-              </div>
-            </div>
 
             <button 
               onClick={handleMainAction}
@@ -303,19 +271,52 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
                     Processing...
                   </>
               ) : 
-               status === PipelineStatus.COMPLETED ? (
-                   <>
-                    <CheckCircle2 size={18} />
-                    Generated
-                   </>
-               ) : 
                isVideoFile ? 'Start Video Analysis' : 'Generate Video'}
             </button>
+          </div>
+
+          {/* History Section */}
+          <div className="flex-1 min-h-[200px] bg-slate-50 border border-slate-200 rounded-xl p-4 overflow-hidden flex flex-col">
+              <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                  <Clock size={16} /> Recent Sessions
+              </h3>
+              <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                  {history.length === 0 ? (
+                      <div className="text-center text-slate-400 text-sm mt-8">
+                          No history yet.
+                      </div>
+                  ) : (
+                      history.map(session => (
+                          <div 
+                            key={session.id}
+                            onClick={() => onLoadSession(session.id)}
+                            className="bg-white border border-slate-200 p-3 rounded-lg cursor-pointer hover:border-brand-300 hover:shadow-sm transition-all group"
+                          >
+                              <div className="flex items-center gap-3">
+                                  <div className="w-10 h-10 bg-brand-50 text-brand-600 rounded-md flex items-center justify-center shrink-0">
+                                      <FileVideo size={20} />
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                      <p className="text-sm font-medium text-slate-900 truncate">{session.videoName}</p>
+                                      <p className="text-xs text-slate-500 flex items-center gap-2">
+                                          <span>{new Date(session.lastAccessed).toLocaleDateString()}</span>
+                                          <span>•</span>
+                                          <span className="flex items-center gap-0.5">
+                                              <MessageSquare size={10} /> {session.chatHistory.length}
+                                          </span>
+                                      </p>
+                                  </div>
+                                  <ChevronRight size={16} className="text-slate-300 group-hover:text-brand-500" />
+                              </div>
+                          </div>
+                      ))
+                  )}
+              </div>
           </div>
         </div>
 
         {/* Right Column: Pipeline Visualization */}
-        <div className="lg:col-span-2 flex flex-col gap-6 h-full min-h-0">
+        <div className="lg:col-span-3 flex flex-col gap-6 h-full min-h-0">
             
             {/* Visual Pipeline Stages */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">

@@ -49,3 +49,13 @@ export interface VideoMetadata {
   url: string;
   duration: number;
 }
+
+export interface SavedSession {
+  id: string;
+  videoFile: File;
+  videoName: string;
+  thumbnail?: string; // Optional: could be a base64 frame
+  timestamp: number;
+  chatHistory: ChatMessage[];
+  lastAccessed: number;
+}
