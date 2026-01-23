@@ -1,0 +1,7 @@
+{
+  "name": "InsightStream",
+  "description": "An AI-powered video generation and interactive learning platform inspired by 3blue1brown. Upload documents to generate visualizations, and interact with the video using drawing tools and Voice AI.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
