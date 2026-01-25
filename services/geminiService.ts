@@ -1,5 +1,5 @@
-import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
-import { ChatMessage } from "../types";
+import { GoogleGenAI, LiveServerMessage, Modality, Type, Schema, GenerateContentResponse } from "@google/genai";
+import { ChatMessage, AgentStage, AnswerCardData } from "../types";
 
 // Check for API Key
 const API_KEY = process.env.API_KEY;
@@ -8,79 +8,204 @@ export const isApiKeyAvailable = (): boolean => {
   return !!API_KEY;
 };
 
-// --- Text/Vision Chat Service ---
+// --- Resilience Helper ---
+async function withRetry<T>(fn: () => Promise<T>, retries = 3, baseDelay = 1000): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    // Retry on 5xx server errors or network-related XHR errors
+    const isNetworkOrServerError = 
+      (error.status && error.status >= 500) || 
+      (error.message && (
+        error.message.includes('xhr error') || 
+        error.message.includes('fetch failed') ||
+        error.message.includes('Rpc failed')
+      ));
 
-export const generateTextResponse = async (
+    if (retries > 0 && isNetworkOrServerError) {
+      console.warn(`API Error (${error.message}). Retrying in ${baseDelay}ms... (Attempts left: ${retries})`);
+      await new Promise(resolve => setTimeout(resolve, baseDelay));
+      return withRetry(fn, retries - 1, baseDelay * 2);
+    }
+    throw error;
+  }
+}
+
+// --- Module 7: Answer Packaging Schema ---
+const answerCardSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    title: { type: Type.STRING, description: "A short, relevant title for the answer based on the visual element selected." },
+    answer: { type: Type.STRING, description: "The direct educational explanation in English. Use Markdown/LaTeX." },
+    key_terms: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          term: { type: Type.STRING },
+          definition: { type: Type.STRING }
+        }
+      },
+      description: "Definitions of 1-3 complex technical terms used in the answer."
+    },
+    suggested_followups: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "2-3 relevant follow-up questions the user might ask next."
+    }
+  },
+  required: ["title", "answer"]
+};
+
+// --- Pipeline Agents Service (Backend Simulation) ---
+
+export const generatePipelineAssets = async (
+  fileName: string, 
+  stage: AgentStage,
+  previousContext: string = ""
+): Promise<string> => {
+  if (!API_KEY) return "Simulation: API Key missing.";
+
+  const ai = new GoogleGenAI({ apiKey: API_KEY });
+  const model = "gemini-3-flash-preview";
+
+  let systemPrompt = "";
+  let userPrompt = "";
+
+  switch (stage) {
+    case AgentStage.SCRIPT:
+      systemPrompt = `You are the Script Agent (Module 3). 
+      Input: A topic based on the filename "${fileName}".
+      Output: A structured educational video script outline inspired by 3blue1brown.
+      Format: Markdown with sections (Intro, Concept, visual cues).`;
+      userPrompt = `Generate a 3-minute video script outline for: ${fileName}`;
+      break;
+
+    case AgentStage.VISUAL_PLAN:
+      systemPrompt = `You are the Visual Planner Agent (Module 6).
+      Input: A script outline.
+      Output: A visual plan mapping script sections to visual geometries (Matrices, Graphs, 3D Surfaces).`;
+      userPrompt = `Based on this script, describe the visual scenes:\n${previousContext}`;
+      break;
+
+    case AgentStage.CODE_GEN:
+      systemPrompt = `You are the Manim Code Generator Agent (Module 9).
+      Input: Visual description.
+      Output: Python code using the Manim library to render the scene.
+      Constraint: Write valid Python code.`;
+      userPrompt = `Generate Manim Python code for this scene:\n${previousContext.slice(0, 500)}...`;
+      break;
+      
+    default:
+      return "";
+  }
+
+  try {
+    const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
+      model,
+      contents: { role: 'user', parts: [{ text: userPrompt }] },
+      config: { systemInstruction: systemPrompt }
+    }));
+    return response.text || "";
+  } catch (e) {
+    console.error(`Agent ${stage} failed`, e);
+    return `[System Error] Could not generate ${stage}. Please try again.`;
+  }
+};
+
+// --- Player Q&A Service (Module 6: Q&A Orchestrator) ---
+
+export const generateStructuredResponse = async (
   prompt: string,
   history: ChatMessage[],
   context?: { selection: any, timestamp: number, image?: string }
-): Promise<string> => {
-  if (!API_KEY) return "Simulation Mode: API Key missing. Please provide a key to use real Gemini models.";
+): Promise<AnswerCardData> => {
+  if (!API_KEY) {
+    return {
+      title: "API Key Missing",
+      answer: "Please configure your API Key to use the InsightStream Q&A agents.",
+      suggested_followups: ["How do I get an API key?"]
+    };
+  }
 
   const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-  // Construct content parts
+  // 1. Context Policy (Module 5) - "S" Tier by default (Image + Roi + Timestamp)
   const parts: any[] = [];
 
-  // 1. Add Image if available (Multimodal)
   if (context?.image) {
     parts.push({
       inlineData: {
         mimeType: 'image/jpeg',
-        data: context.image // Base64 string
+        data: context.image
       }
     });
   }
 
-  // 2. Add Text Prompt with Context Metadata
-  let textPrompt = `[User Question]: ${prompt}`;
+  let fullPrompt = `User Question: "${prompt}"`;
   
   if (context) {
-    textPrompt = `
-    [Context Info]
-    Video Timestamp: ${context.timestamp}s
-    User Selection Coordinates: ${JSON.stringify(context.selection || "None")}
+    fullPrompt = `
+    [Context - Timestamp: ${context.timestamp.toFixed(2)}s]
+    [Context - Selection ROI: ${JSON.stringify(context.selection)}]
     
-    ${textPrompt}
+    ${fullPrompt}
     `;
   }
-  
-  parts.push({ text: textPrompt });
+
+  parts.push({ text: fullPrompt });
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: { parts: parts }, 
+      contents: { role: 'user', parts: parts },
       config: {
-        systemInstruction: `You are InsightStream AI, an expert educational assistant inspired by 3blue1brown.
+        systemInstruction: `You are the Q&A Orchestrator Agent (Module 6) for InsightStream.
         
-        Guidelines:
-        1. **DIRECT ANSWER ONLY.** Do NOT use greetings, pleasantries, or intro phrases.
-        2. Start directly with the mathematical derivation, concept explanation, or data analysis.
-        3. **FORMATTING IS CRITICAL:**
-           - Use **LaTeX** for ALL mathematical formulas.
-           - Enclose inline formulas with single dollar signs: $ E = mc^2 $
-           - Enclose block formulas with double dollar signs: $$ \\int_{a}^{b} x^2 dx $$
-           - Use **Bold** for key terms.
-           - Use bullet points for steps.
-        4. If the user provides an image with a red box, explain ONLY what is inside that red box.
-        5. Be concise, encouraging, and mathematically precise.`
+        Role: Explain educational concepts in videos (3blue1brown style) based on user selection.
+        
+        Rules:
+        1. Analyze the image and the red/blue selection box (if present).
+        2. Identify the mathematical symbol, graph, or object selected.
+        3. Explain it clearly in English. Use LaTeX for math.
+        4. Populate the JSON response strictly.`,
+        responseMimeType: "application/json",
+        responseSchema: answerCardSchema
       }
-    });
-    return response.text || "I couldn't generate a response.";
-  } catch (error) {
-    console.error("Gemini API Error:", error);
-    return "Error communicating with Gemini API.";
+    }));
+
+    const jsonText = response.text || "{}";
+    try {
+      return JSON.parse(jsonText) as AnswerCardData;
+    } catch (parseError) {
+      console.error("JSON Parse Error", parseError);
+      return {
+        title: "Parsing Error",
+        answer: response.text || "Raw output received.",
+        is_voice_stream: false
+      };
+    }
+
+  } catch (error: any) {
+    console.error("Gemini Q&A Error:", error);
+    const errorMsg = error.message || "Unknown error";
+    return {
+      title: "Connection Error",
+      answer: `Failed to reach the reasoning engine. (${errorMsg})`,
+    };
   }
 };
 
-// --- Live API Service (Voice) ---
+// --- Live API Service (Voice) - Optimized for Low Latency ---
 
 export class LiveSession {
   private ai: GoogleGenAI;
-  private session: any; // Type is technically Promise<LiveSession> or LiveSession depending on state
+  private session: any; 
   private inputAudioContext: AudioContext | null = null;
   private outputAudioContext: AudioContext | null = null;
+  private mediaStream: MediaStream | null = null;
+  private processor: ScriptProcessorNode | null = null;
+  private source: MediaStreamAudioSourceNode | null = null;
   private nextStartTime = 0;
   private sources = new Set<AudioBufferSourceNode>();
   private onMessageCallback: (text: string, isUser: boolean) => void;
@@ -98,22 +223,33 @@ export class LiveSession {
   async connect() {
     if (!API_KEY) throw new Error("No API Key");
 
-    // Use default sample rate (usually 44.1k or 48k) to avoid hardware incompatibility
-    this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    this.outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    // 1. Output Context: 24kHz (Matches Gemini's Native Output)
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    this.outputAudioContext = new AudioContextClass({ sampleRate: 24000 });
     
-    // Resume Audio Contexts to satisfy browser autoplay policies
-    if (this.inputAudioContext.state === 'suspended') await this.inputAudioContext.resume();
-    if (this.outputAudioContext.state === 'suspended') await this.outputAudioContext.resume();
+    // 2. Input Context: 16kHz (Matches Gemini's Required Input)
+    this.inputAudioContext = new AudioContextClass({ sampleRate: 16000 });
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (this.outputAudioContext.state === 'suspended') await this.outputAudioContext.resume();
+    if (this.inputAudioContext.state === 'suspended') await this.inputAudioContext.resume();
+
+    // 3. Get User Media with Echo Cancellation
+    this.mediaStream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+        } 
+    });
 
     const sessionPromise = this.ai.live.connect({
       model: 'gemini-2.5-flash-native-audio-preview-12-2025',
       callbacks: {
         onopen: () => {
           console.log("Live Session Opened");
-          this.startAudioStream(stream, sessionPromise);
+          this.startAudioStream(sessionPromise);
         },
         onmessage: (message: LiveServerMessage) => this.handleMessage(message),
         onclose: () => console.log("Live Session Closed"),
@@ -124,16 +260,12 @@ export class LiveSession {
         speechConfig: {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
         },
-        // MULTILINGUAL & INTERACTIVE SYSTEM INSTRUCTION
-        systemInstruction: `You are InsightStream AI. You are a real-time multilingual video tutor. 
-        
-        CRITICAL INSTRUCTIONS:
-        1. **Detect Language**: Automatically detect the language the user is speaking (e.g., English, Chinese/Mandarin, Spanish, French, Japanese) and RESPOND IN THE EXACT SAME LANGUAGE.
-        2. **Vision Aware**: You can see the video stream and red selection boxes the user draws. 
-        3. **Directness**: Answer spoken questions immediately and concisely.
-        4. **Transcription**: Ensure you are understanding the user's speech correctly in their native language.`,
-        inputAudioTranscription: {}, // Critical for User Speech-to-Text
-        outputAudioTranscription: {}, // Critical for Model Speech-to-Text
+        systemInstruction: `You are InsightStream AI.
+        1. Speak EXACTLY like a human tutor.
+        2. Detect the user's language and respond in that language.
+        3. Be concise.`,
+        inputAudioTranscription: {},
+        outputAudioTranscription: {}, 
       },
     });
 
@@ -156,90 +288,56 @@ export class LiveSession {
     });
   }
 
-  private startAudioStream(stream: MediaStream, sessionPromise: Promise<any>) {
-    if (!this.inputAudioContext) return;
+  private startAudioStream(sessionPromise: Promise<any>) {
+    if (!this.inputAudioContext || !this.mediaStream) return;
     
-    const source = this.inputAudioContext.createMediaStreamSource(stream);
-    const processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
+    this.source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
     
-    processor.onaudioprocess = (e) => {
+    this.processor = this.inputAudioContext.createScriptProcessor(2048, 1, 1);
+    
+    this.processor.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
         
-        // Calculate Volume for UI
         let sum = 0;
-        for (let i = 0; i < inputData.length; i++) {
+        for (let i = 0; i < inputData.length; i += 4) {
             sum += inputData[i] * inputData[i];
         }
-        const rms = Math.sqrt(sum / inputData.length);
+        const rms = Math.sqrt(sum / (inputData.length / 4));
         this.onVolumeCallback(rms);
 
-        // Downsample to 16kHz for Gemini
-        const downsampledData = this.downsampleBuffer(inputData, this.inputAudioContext!.sampleRate, 16000);
-        
-        const pcmBlob = this.createBlob(downsampledData);
+        const pcmBase64 = this.float32ToInt16Base64(inputData);
+
         sessionPromise.then((session) => {
-            session.sendRealtimeInput({ media: pcmBlob });
+            session.sendRealtimeInput({ 
+                media: {
+                    mimeType: 'audio/pcm;rate=16000',
+                    data: pcmBase64
+                }
+            });
         });
     };
 
-    source.connect(processor);
-    processor.connect(this.inputAudioContext.destination);
+    this.source.connect(this.processor);
+    this.processor.connect(this.inputAudioContext.destination);
   }
 
-  // Robust Downsampling Function
-  private downsampleBuffer(buffer: Float32Array, sampleRate: number, outSampleRate: number): Float32Array {
-      if (outSampleRate === sampleRate) {
-          return buffer;
+  private float32ToInt16Base64(float32: Float32Array): string {
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+          const s = Math.max(-1, Math.min(1, float32[i]));
+          int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
-      if (outSampleRate > sampleRate) {
-          throw new Error("Upsampling not supported");
+      
+      let binary = '';
+      const bytes = new Uint8Array(int16.buffer);
+      const len = bytes.byteLength;
+      for (let i = 0; i < len; i++) {
+          binary += String.fromCharCode(bytes[i]);
       }
-      const sampleRateRatio = sampleRate / outSampleRate;
-      const newLength = Math.round(buffer.length / sampleRateRatio);
-      const result = new Float32Array(newLength);
-      let offsetResult = 0;
-      let offsetBuffer = 0;
-      while (offsetResult < result.length) {
-          const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
-          let accum = 0, count = 0;
-          for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-              accum += buffer[i];
-              count++;
-          }
-          result[offsetResult] = count > 0 ? accum / count : 0; // Simple average (low-pass filter effect)
-          offsetResult++;
-          offsetBuffer = nextOffsetBuffer;
-      }
-      return result;
-  }
-
-  private createBlob(data: Float32Array) {
-    const l = data.length;
-    const int16 = new Int16Array(l);
-    for (let i = 0; i < l; i++) {
-        // Clamp values to [-1, 1] before scaling
-        const val = Math.max(-1, Math.min(1, data[i]));
-        int16[i] = val < 0 ? val * 0x8000 : val * 0x7FFF;
-    }
-    const uint8 = new Uint8Array(int16.buffer);
-    
-    // Efficient chunked base64 encoding to avoid call stack size exceeded
-    let binary = '';
-    const chunkSize = 8192;
-    for (let i = 0; i < uint8.length; i += chunkSize) {
-        const chunk = uint8.subarray(i, i + chunkSize);
-        binary += String.fromCharCode.apply(null, Array.from(chunk));
-    }
-    const base64 = btoa(binary);
-
-    return {
-        data: base64,
-        mimeType: 'audio/pcm;rate=16000',
-    };
+      return btoa(binary);
   }
 
   private async handleMessage(message: LiveServerMessage) {
-    // Handle Transcriptions
     if (message.serverContent?.inputTranscription?.text) {
         this.onMessageCallback(message.serverContent.inputTranscription.text, true);
     }
@@ -247,53 +345,68 @@ export class LiveSession {
         this.onMessageCallback(message.serverContent.outputTranscription.text, false);
     }
 
-    // Handle Audio
     const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
     if (base64Audio && this.outputAudioContext) {
-        this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
-        
-        // Decode
-        const binaryString = atob(base64Audio);
-        const len = binaryString.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-        }
-        
-        // Convert to AudioBuffer
-        const dataInt16 = new Int16Array(bytes.buffer);
-        const buffer = this.outputAudioContext.createBuffer(1, dataInt16.length, 24000);
-        const channelData = buffer.getChannelData(0);
-        for(let i=0; i<channelData.length; i++) {
-            channelData[i] = dataInt16[i] / 32768.0;
+        const currentTime = this.outputAudioContext.currentTime;
+        if (this.nextStartTime < currentTime) {
+            this.nextStartTime = currentTime;
         }
 
-        const source = this.outputAudioContext.createBufferSource();
-        source.buffer = buffer;
-        const gainNode = this.outputAudioContext.createGain();
-        source.connect(gainNode);
-        gainNode.connect(this.outputAudioContext.destination);
-        
-        source.start(this.nextStartTime);
-        this.nextStartTime += buffer.duration;
-        this.sources.add(source);
-        
-        source.onended = () => this.sources.delete(source);
+        try {
+            const binaryString = atob(base64Audio);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            const dataInt16 = new Int16Array(bytes.buffer);
+            
+            const buffer = this.outputAudioContext.createBuffer(1, dataInt16.length, 24000);
+            const channelData = buffer.getChannelData(0);
+            for(let i=0; i<channelData.length; i++) {
+                channelData[i] = dataInt16[i] / 32768.0;
+            }
+
+            const source = this.outputAudioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(this.outputAudioContext.destination);
+            
+            source.start(this.nextStartTime);
+            this.nextStartTime += buffer.duration;
+            this.sources.add(source);
+            
+            source.onended = () => this.sources.delete(source);
+        } catch (e) {
+            console.error("Audio Decode Error", e);
+        }
     }
     
     if (message.serverContent?.interrupted) {
-        this.sources.forEach(s => s.stop());
+        this.sources.forEach(s => {
+            try { s.stop(); } catch(e) {}
+        });
         this.sources.clear();
         this.nextStartTime = 0;
     }
   }
 
   disconnect() {
+    if (this.processor) {
+        this.processor.disconnect();
+        this.processor.onaudioprocess = null;
+    }
+    if (this.source) {
+        this.source.disconnect();
+    }
+    if (this.mediaStream) {
+        this.mediaStream.getTracks().forEach(track => track.stop());
+    }
     if (this.inputAudioContext && this.inputAudioContext.state !== 'closed') {
       this.inputAudioContext.close();
     }
     if (this.outputAudioContext && this.outputAudioContext.state !== 'closed') {
       this.outputAudioContext.close();
     }
+    this.sources.clear();
   }
 }

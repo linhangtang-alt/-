@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AgentStage, AgentLog, PipelineStatus, AppView, SavedSession } from '../types';
-import { Video, FileText, Activity, Code, Layers, PlayCircle, CheckCircle2, Circle, UploadCloud, FileVideo, Trash2, FileCheck, Clock, MessageSquare, ChevronRight, Settings, Zap, Search } from 'lucide-react';
+import { AgentStage, AgentLog, PipelineStatus, AppView, SavedSession, GeneratedArtifacts, SemanticVideoData } from '../types';
+import { Video, FileText, Activity, Code, Layers, PlayCircle, CheckCircle2, Circle, UploadCloud, FileVideo, Trash2, Settings, Zap, Search, Eye, Terminal } from 'lucide-react';
 
 interface GeneratorViewProps {
   onNavigate: (view: AppView) => void;
-  onVideoUpload: (file: File) => void;
+  onVideoUpload: (file: File | null, artifacts?: GeneratedArtifacts, videoUrl?: string, semanticData?: SemanticVideoData) => void;
   history: SavedSession[];
   onLoadSession: (id: string) => void;
 }
@@ -15,23 +15,26 @@ interface StageItemProps {
   isCompleted: boolean;
 }
 
+const API_BASE = "http://localhost:8000";
+
 const StageItem: React.FC<StageItemProps> = ({ stage, isActive, isCompleted }) => {
   let Icon = Circle;
   if (stage === AgentStage.INGEST) Icon = FileText;
-  if (stage === AgentStage.SCRIPT) Icon = Code;
+  if (stage === AgentStage.SCRIPT) Icon = FileText;
   if (stage === AgentStage.VISUAL_PLAN) Icon = Layers;
   if (stage === AgentStage.MOTION) Icon = Activity;
+  if (stage === AgentStage.CODE_GEN) Icon = Code;
   if (stage === AgentStage.RENDER) Icon = Video;
 
   return (
-    <div className={`flex flex-col items-center gap-2 w-24 transition-all duration-300 ${isActive ? 'scale-110' : 'opacity-70'}`}>
-      <div className={`w-12 h-12 rounded-full flex items-center justify-center border-2 
+    <div className={`flex flex-col items-center gap-2 w-20 transition-all duration-300 ${isActive ? 'scale-110 opacity-100' : 'opacity-60'}`}>
+      <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-colors duration-500
         ${isCompleted ? 'bg-green-100 border-green-500 text-green-600' : 
-          isActive ? 'bg-blue-100 border-blue-500 text-blue-600 animate-pulse' : 
+          isActive ? 'bg-brand-100 border-brand-500 text-brand-600 animate-pulse' : 
           'bg-slate-50 border-slate-300 text-slate-400'}`}>
-        {isCompleted ? <CheckCircle2 size={24} /> : <Icon size={24} />}
+        {isCompleted ? <CheckCircle2 size={20} /> : <Icon size={20} />}
       </div>
-      <span className="text-xs text-center font-medium text-slate-600">{stage}</span>
+      <span className="text-[10px] text-center font-medium text-slate-600 leading-tight h-8 flex items-center">{stage}</span>
     </div>
   );
 };
@@ -41,12 +44,17 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
   const [status, setStatus] = useState<PipelineStatus>(PipelineStatus.IDLE);
   const [logs, setLogs] = useState<AgentLog[]>([]);
   const [activeStage, setActiveStage] = useState<AgentStage | null>(null);
-  const [dragActive, setDragActive] = useState(false);
   const [analysisMode, setAnalysisMode] = useState<'fast' | 'deep'>('fast');
   
+  // Generated Artifacts & Backend Data
+  const [artifacts, setArtifacts] = useState<GeneratedArtifacts>({});
+  const [generatedVideoUrl, setGeneratedVideoUrl] = useState<string | null>(null);
+  const [generatedSemanticData, setGeneratedSemanticData] = useState<SemanticVideoData | undefined>(undefined);
+  
+  const [activeTab, setActiveTab] = useState<'logs' | 'script' | 'code'>('logs');
+
   const logsEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll logs
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
@@ -64,26 +72,6 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
-      setStatus(PipelineStatus.IDLE); // Reset status on new file
-    }
-  };
-
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setFile(e.dataTransfer.files[0]);
       setStatus(PipelineStatus.IDLE);
     }
   };
@@ -93,340 +81,330 @@ const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload
     setStatus(PipelineStatus.IDLE);
     setLogs([]);
     setActiveStage(null);
+    setArtifacts({});
+    setGeneratedVideoUrl(null);
   };
 
   const isVideoFile = file?.type.startsWith('video/');
 
   const handleMainAction = () => {
     if (!file) return;
-
     if (isVideoFile) {
-        startVideoAnalysis();
+        startVideoAnalysis(); // Keep local simulation for raw video analysis if needed
     } else {
-        startGeneration();
+        startBackendGeneration(); // Use Python Backend for Documents
     }
   };
 
   const handleEnterSession = () => {
-      if (file) {
-          onVideoUpload(file);
-      }
+      // Pass the backend video URL if available, otherwise fallback to local file
+      onVideoUpload(file, artifacts, generatedVideoUrl || undefined, generatedSemanticData);
   };
 
+  // Keep this as a simulation for uploaded MP4s (Video Analysis)
   const startVideoAnalysis = () => {
       if (!file) return;
       setStatus(PipelineStatus.PROCESSING);
       setLogs([]);
-
-      // Slower, more realistic stages
-      const videoStages = [
-          { msg: "Identifying video container (MP4/WebM)...", delay: 1000 },
-          { msg: "Extracting audio track for transcription...", delay: 2000 },
-          { msg: analysisMode === 'deep' ? "Performing Deep Semantic Analysis..." : "Quick Content Scan...", delay: 3500 },
-          { msg: "Generating keyframe thumbnails...", delay: 4500 },
-          { msg: "Initializing Gemini 1.5 Pro Multimodal Context...", delay: 6000 },
-          { msg: "Building Vector Index for Knowledge Graph...", delay: 7500 },
-          { msg: "Session Ready.", delay: 8500 }
-      ];
-
       setActiveStage(AgentStage.INGEST);
-      addLog(AgentStage.INGEST, `Starting ${analysisMode === 'deep' ? 'Deep' : 'Fast'} Video Analysis...`, "info");
-
-      let currentStep = 0;
-      const runVideoStep = () => {
-          if (currentStep >= videoStages.length) {
-              setStatus(PipelineStatus.COMPLETED);
-              setActiveStage(null);
-              addLog(AgentStage.INGEST, "Analysis Complete. Waiting for user...", "success");
-              return;
-          }
-
-          const { msg, delay } = videoStages[currentStep];
-          setTimeout(() => {
-              addLog(AgentStage.INGEST, msg, "info");
-              currentStep++;
-              runVideoStep();
-          }, 1000); // Base delay between steps
-      };
       
-      runVideoStep();
+      setTimeout(() => {
+          addLog(AgentStage.INGEST, "Ingesting video file...", "info");
+          setTimeout(() => {
+            addLog(AgentStage.KNOWLEDGE, "Indexing visual content (Vector DB)...", "info");
+            setStatus(PipelineStatus.COMPLETED);
+            setActiveStage(null);
+            addLog(AgentStage.RENDER, "Video Analysis Ready.", "success");
+          }, 2000);
+      }, 1000);
   };
 
-  const startGeneration = () => {
+  // --- REAL BACKEND INTEGRATION ---
+  const startBackendGeneration = async () => {
     if (!file) return;
     setStatus(PipelineStatus.PROCESSING);
     setLogs([]);
-    
-    const stages = [
-      { stage: AgentStage.INGEST, msg: "Cleaning and normalizing Markdown...", delay: 1000 },
-      { stage: AgentStage.KNOWLEDGE, msg: "Building Concept Graph and Glossary...", delay: 2500 },
-      { stage: AgentStage.SCRIPT, msg: "Generating script outline and narration...", delay: 4000 },
-      { stage: AgentStage.VISUAL_PLAN, msg: "Mapping visual elements to script segments...", delay: 6000 },
-      { stage: AgentStage.MOTION, msg: "Writing Manim (Python) animation code...", delay: 8000 },
-      { stage: AgentStage.RENDER, msg: "Compiling final MP4 assets...", delay: 11000 },
-    ];
+    setArtifacts({});
+    setActiveTab('logs');
+    setActiveStage(AgentStage.INGEST);
 
-    let currentStep = 0;
-
-    const runStep = () => {
-      if (currentStep >= stages.length) {
-        setStatus(PipelineStatus.COMPLETED);
-        setActiveStage(null);
-        addLog(AgentStage.RENDER, "Video generation complete! Ready.", 'success');
-        return;
-      }
-
-      const { stage, msg, delay } = stages[currentStep];
-      setActiveStage(stage);
-      addLog(stage, "Starting agent...", 'info');
-      
-      setTimeout(() => {
-        addLog(stage, msg, 'info');
-        if (stage === AgentStage.MOTION) {
-            setTimeout(() => addLog(stage, "Optimizing animation curves...", 'info'), 1000);
-        }
+    try {
+        // 1. Submit Job
+        const res = await fetch(`${API_BASE}/api/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: file.name,
+                user_requirements: "Explain clearly and concisely.",
+                file_path: file.name // Mocking path as backend is a simulation wrapper
+            })
+        });
         
-        setTimeout(() => {
-          addLog(stage, `Stage ${stage} completed successfully.`, 'success');
-          currentStep++;
-          runStep();
-        }, 1500);
-      }, 500);
-    };
+        if (!res.ok) throw new Error("Failed to submit job");
+        const { task_id } = await res.json();
+        addLog(AgentStage.INGEST, `Job submitted to Queue. Task ID: ${task_id}`, 'info');
 
-    runStep();
+        // 2. Poll Status
+        const pollInterval = setInterval(async () => {
+            try {
+                const statusRes = await fetch(`${API_BASE}/api/status/${task_id}`);
+                if(!statusRes.ok) return;
+                
+                const data = await statusRes.json();
+                
+                // Map Backend Progress to Frontend Stages & Logs
+                syncProgressToStage(data.progress, data.message);
+
+                if (data.status === 'completed') {
+                    clearInterval(pollInterval);
+                    await handleBackendCompletion(data);
+                } else if (data.status === 'failed') {
+                    clearInterval(pollInterval);
+                    setStatus(PipelineStatus.ERROR);
+                    addLog(AgentStage.ERROR, data.message || "Generation Failed", 'warning');
+                }
+            } catch (pollErr) {
+                console.warn("Polling error", pollErr);
+            }
+        }, 1500);
+
+    } catch (e: any) {
+        console.error(e);
+        setStatus(PipelineStatus.ERROR);
+        addLog(AgentStage.ERROR, `Connection Error: ${e.message}`, 'warning');
+    }
+  };
+
+  const syncProgressToStage = (progress: number, message: string) => {
+      // Heuristic mapping of progress % to Agents
+      let currentStage = AgentStage.INGEST;
+      if (progress > 10) currentStage = AgentStage.SCRIPT;
+      if (progress > 30) currentStage = AgentStage.VISUAL_PLAN; // Backend skips explicit plan step, but visual feedback is nice
+      if (progress > 45) currentStage = AgentStage.CODE_GEN;
+      if (progress > 60) currentStage = AgentStage.RENDER;
+      if (progress > 80) currentStage = AgentStage.RENDER; // QA phase
+      
+      setActiveStage(currentStage);
+      
+      // Only add log if message changed to avoid spam
+      setLogs(prev => {
+          const last = prev[prev.length - 1];
+          if (last?.message !== message && message) {
+              return [...prev, {
+                  id: Math.random().toString(36).substr(2, 9),
+                  stage: currentStage,
+                  message,
+                  timestamp: Date.now(),
+                  status: 'info'
+              }];
+          }
+          return prev;
+      });
+  };
+
+  const handleBackendCompletion = async (data: any) => {
+      setStatus(PipelineStatus.COMPLETED);
+      setActiveStage(null);
+      addLog(AgentStage.RENDER, "Pipeline Finished Successfully.", "success");
+
+      const fullVideoUrl = `${API_BASE}${data.video_url}`;
+      setGeneratedVideoUrl(fullVideoUrl);
+
+      if (data.script_url) {
+          try {
+              // Fetch the generated script JSON
+              const scriptRes = await fetch(`${API_BASE}${data.script_url}`);
+              const scriptJson = await scriptRes.json();
+              
+              // Convert Backend Script Schema to SemanticVideoData
+              const convertedSemanticData: SemanticVideoData = {
+                  meta: { project_id: data.task_id, language: 'en', version: '1.0' },
+                  scenes: [{
+                      scene_id: "Main",
+                      start_time: 0,
+                      end_time: 999,
+                      visual_context: {
+                          layout: { strategy_name: "Generated Layout", description: "Dynamic layout based on script.", regions: [] },
+                          frame_description: "Auto-generated scene",
+                          components: []
+                      },
+                      actions: [],
+                      lines: scriptJson.map((line: any) => ({
+                          line_id: line.line_id || Math.random().toString(),
+                          text: line.text,
+                          start_s: line.start_time,
+                          end_s: line.end_time
+                      }))
+                  }]
+              };
+              
+              setGeneratedSemanticData(convertedSemanticData);
+              setArtifacts(prev => ({ ...prev, script: JSON.stringify(scriptJson, null, 2) }));
+              setActiveTab('script');
+          } catch (err) {
+              console.error("Failed to parse generated script", err);
+              addLog(AgentStage.SCRIPT, "Warning: Could not load generated script metadata.", "warning");
+          }
+      }
   };
 
   return (
     <div className="flex flex-col h-full max-w-7xl mx-auto p-6 gap-6">
-      {/* Header */}
       <div className="flex justify-between items-center pb-6 border-b border-slate-200">
         <div>
           <h1 className="text-3xl font-bold text-slate-900 tracking-tight">InsightStream Studio</h1>
-          <p className="text-slate-500 mt-1">Transform documents into visual intuitive videos powered by Gemini & Manim.</p>
+          <p className="text-slate-500 mt-1">End-to-End Educational Video Generation Pipeline.</p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 h-full min-h-0">
         
-        {/* Left Column: Input */}
+        {/* Left Column: Upload */}
         <div className="lg:col-span-1 flex flex-col gap-6">
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 h-fit">
             <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
               <UploadCloud size={20} className="text-brand-600"/> New Project
             </h2>
             
-            {/* Upload Area */}
             {!file ? (
-                <div 
-                    className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer relative ${
-                        dragActive ? 'border-brand-500 bg-brand-50' : 'border-slate-300 hover:bg-slate-50 hover:border-slate-400'
-                    }`}
-                    onDragEnter={handleDrag}
-                    onDragLeave={handleDrag}
-                    onDragOver={handleDrag}
-                    onDrop={handleDrop}
-                >
+                <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 flex flex-col items-center justify-center text-center hover:bg-slate-50 transition-all relative">
                     <input 
                         type="file" 
                         onChange={handleUpload}
-                        disabled={status === PipelineStatus.PROCESSING}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                        accept=".md,.pdf,.txt,.mp4,.mov,.webm"
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        accept=".md,.pdf,.txt,.mp4"
                     />
                     <div className="bg-brand-100 p-4 rounded-full mb-3 text-brand-600">
                         <UploadCloud size={32} />
                     </div>
-                    
-                    <p className="text-slate-900 font-medium mb-1">
-                        Click or drag file
-                    </p>
-                    <p className="text-xs text-slate-500 max-w-[200px]">
-                        Supports <span className="font-semibold text-slate-700">PDF, MD</span> or <span className="font-semibold text-slate-700">MP4</span>.
-                    </p>
+                    <p className="text-slate-900 font-medium mb-1">Upload Material</p>
+                    <p className="text-xs text-slate-500">PDF, Markdown or MP4</p>
                 </div>
             ) : (
                 <div className="space-y-4">
-                    {/* File Card */}
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center gap-3 animate-fade-in relative group">
-                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center shrink-0 ${
-                            isVideoFile ? 'bg-purple-100 text-purple-600' : 'bg-red-100 text-red-600'
-                        }`}>
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center gap-3">
+                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center shrink-0 ${isVideoFile ? 'bg-purple-100 text-purple-600' : 'bg-red-100 text-red-600'}`}>
                             {isVideoFile ? <FileVideo size={24} /> : <FileText size={24} />}
                         </div>
                         <div className="flex-1 min-w-0">
                             <p className="font-medium text-slate-900 truncate">{file.name}</p>
-                            <p className="text-xs text-slate-500 flex items-center gap-1">
-                                {(file.size / 1024 / 1024).toFixed(2)} MB
-                            </p>
+                            <p className="text-xs text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
                         </div>
                         {status === PipelineStatus.IDLE && (
-                            <button 
-                                onClick={removeFile}
-                                className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
-                            >
+                            <button onClick={removeFile} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full">
                                 <Trash2 size={18} />
                             </button>
                         )}
                     </div>
 
-                    {/* Options Panel (Only when IDLE) */}
-                    {status === PipelineStatus.IDLE && isVideoFile && (
-                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 animate-fade-in">
-                            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1">
-                                <Settings size={12} /> Analysis Configuration
-                            </h3>
-                            <div className="flex gap-2">
-                                <button 
-                                    onClick={() => setAnalysisMode('fast')}
-                                    className={`flex-1 py-2 px-2 rounded-lg text-xs font-medium border transition-all flex flex-col items-center gap-1 ${
-                                        analysisMode === 'fast' 
-                                        ? 'bg-white border-brand-500 text-brand-600 shadow-sm' 
-                                        : 'bg-slate-100 border-transparent text-slate-500 hover:bg-white hover:border-slate-300'
-                                    }`}
-                                >
-                                    <Zap size={14} />
-                                    Fast Scan
-                                </button>
-                                <button 
-                                    onClick={() => setAnalysisMode('deep')}
-                                    className={`flex-1 py-2 px-2 rounded-lg text-xs font-medium border transition-all flex flex-col items-center gap-1 ${
-                                        analysisMode === 'deep' 
-                                        ? 'bg-white border-brand-500 text-brand-600 shadow-sm' 
-                                        : 'bg-slate-100 border-transparent text-slate-500 hover:bg-white hover:border-slate-300'
-                                    }`}
-                                >
-                                    <Search size={14} />
-                                    Deep Analysis
-                                </button>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Action Buttons */}
                     {status === PipelineStatus.COMPLETED ? (
                         <button 
                             onClick={handleEnterSession}
-                            className="w-full py-3.5 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 hover:shadow-md transition-all flex items-center justify-center gap-2 animate-bounce-short"
+                            className="w-full py-3.5 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 transition-all flex items-center justify-center gap-2 animate-bounce-short"
                         >
-                            Enter Session <ChevronRight size={18} />
+                            Enter Session <Eye size={18} />
                         </button>
                     ) : (
                         <button 
                             onClick={handleMainAction}
                             disabled={status === PipelineStatus.PROCESSING}
                             className={`w-full py-3.5 rounded-lg font-semibold text-white transition-all shadow-sm flex items-center justify-center gap-2
-                                ${status === PipelineStatus.PROCESSING 
-                                ? 'bg-slate-300 cursor-not-allowed' 
-                                : 'bg-brand-600 hover:bg-brand-700 hover:shadow-md'}`}
+                                ${status === PipelineStatus.PROCESSING ? 'bg-slate-300 cursor-not-allowed' : 'bg-brand-600 hover:bg-brand-700'}`}
                         >
-                            {status === PipelineStatus.PROCESSING ? (
-                                <>
-                                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                                    Analyzing...
-                                </>
-                            ) : 
-                            isVideoFile ? 'Start Video Analysis' : 'Generate Video'}
+                            {status === PipelineStatus.PROCESSING ? 'Processing...' : isVideoFile ? 'Analyze Video' : 'Generate Video'}
                         </button>
                     )}
                 </div>
             )}
           </div>
 
-          {/* History Section */}
-          <div className="flex-1 min-h-[200px] bg-slate-50 border border-slate-200 rounded-xl p-4 overflow-hidden flex flex-col">
-              <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                  <Clock size={16} /> Recent Sessions
-              </h3>
-              <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                  {history.length === 0 ? (
-                      <div className="text-center text-slate-400 text-sm mt-8">
-                          No history yet.
-                      </div>
-                  ) : (
-                      history.map(session => (
-                          <div 
-                            key={session.id}
-                            onClick={() => onLoadSession(session.id)}
-                            className="bg-white border border-slate-200 p-3 rounded-lg cursor-pointer hover:border-brand-300 hover:shadow-sm transition-all group"
-                          >
-                              <div className="flex items-center gap-3">
-                                  <div className="w-10 h-10 bg-brand-50 text-brand-600 rounded-md flex items-center justify-center shrink-0">
-                                      <FileVideo size={20} />
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                      <p className="text-sm font-medium text-slate-900 truncate">{session.videoName}</p>
-                                      <p className="text-xs text-slate-500 flex items-center gap-2">
-                                          <span>{new Date(session.lastAccessed).toLocaleDateString()}</span>
-                                          <span>•</span>
-                                          <span className="flex items-center gap-0.5">
-                                              <MessageSquare size={10} /> {session.chatHistory.length}
-                                          </span>
-                                      </p>
-                                  </div>
-                                  <ChevronRight size={16} className="text-slate-300 group-hover:text-brand-500" />
-                              </div>
+           {/* History List */}
+           <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl p-4 overflow-hidden flex flex-col">
+              <h3 className="text-sm font-semibold text-slate-700 mb-3">Recent Projects</h3>
+              <div className="flex-1 overflow-y-auto space-y-2">
+                  {history.map(session => (
+                      <div 
+                        key={session.id}
+                        onClick={() => onLoadSession(session.id)}
+                        className="bg-white border border-slate-200 p-3 rounded-lg cursor-pointer hover:border-brand-300 hover:shadow-sm transition-all flex items-center gap-3"
+                      >
+                          <div className="w-8 h-8 bg-brand-50 text-brand-600 rounded flex items-center justify-center">
+                              <FileVideo size={16} />
                           </div>
-                      ))
-                  )}
+                          <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-slate-900 truncate">{session.videoName}</p>
+                              <p className="text-[10px] text-slate-500">{new Date(session.lastAccessed).toLocaleDateString()}</p>
+                          </div>
+                      </div>
+                  ))}
               </div>
           </div>
         </div>
 
-        {/* Right Column: Pipeline Visualization */}
+        {/* Right Column: Pipeline Inspector */}
         <div className="lg:col-span-3 flex flex-col gap-6 h-full min-h-0">
             
             {/* Visual Pipeline Stages */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                <div className="flex flex-wrap justify-between items-start gap-4">
-                  {Object.values(AgentStage)
-                    .filter(s => s !== AgentStage.ERROR)
-                    .map((s) => {
-                      const isCompleted = logs.some(l => l.stage === s && l.message.includes('completed')) || status === PipelineStatus.COMPLETED;
-                      const isActive = activeStage === s;
-                      return <StageItem key={s} stage={s} isActive={isActive} isCompleted={isCompleted} />;
+                <div className="flex flex-wrap justify-between items-start gap-2">
+                  {Object.values(AgentStage).filter(s => s !== AgentStage.ERROR).map((s) => {
+                      const isCompleted = logs.some(l => l.stage === s && l.message.includes('completed')) || status === PipelineStatus.COMPLETED || (status === PipelineStatus.PROCESSING && activeStage !== s && logs.some(l => l.stage === s));
+                      return <StageItem key={s} stage={s} isActive={activeStage === s} isCompleted={isCompleted} />;
                   })}
                 </div>
             </div>
 
-            {/* Terminal/Logs */}
-            <div className="flex-1 bg-slate-900 rounded-xl shadow-lg border border-slate-800 p-4 font-mono text-sm overflow-hidden flex flex-col">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
-                <span className="text-slate-400 flex items-center gap-2">
-                  <Activity size={14} /> System Activity Log
-                </span>
-                <div className="flex gap-1">
-                  <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                  <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                  <div className="w-3 h-3 rounded-full bg-green-500"></div>
+            {/* Inspector Tabs */}
+            <div className="flex-1 bg-slate-900 rounded-xl shadow-lg border border-slate-800 flex flex-col overflow-hidden">
+                <div className="flex border-b border-slate-800 bg-slate-950">
+                    <button 
+                        onClick={() => setActiveTab('logs')}
+                        className={`px-4 py-3 text-sm font-mono flex items-center gap-2 ${activeTab === 'logs' ? 'bg-slate-900 text-brand-400 border-t-2 border-brand-400' : 'text-slate-400 hover:bg-slate-900'}`}
+                    >
+                        <Terminal size={14} /> Agent Logs
+                    </button>
+                    <button 
+                        onClick={() => setActiveTab('script')}
+                        className={`px-4 py-3 text-sm font-mono flex items-center gap-2 ${activeTab === 'script' ? 'bg-slate-900 text-brand-400 border-t-2 border-brand-400' : 'text-slate-400 hover:bg-slate-900'}`}
+                    >
+                        <FileText size={14} /> Script.json
+                    </button>
+                    <button 
+                        onClick={() => setActiveTab('code')}
+                        className={`px-4 py-3 text-sm font-mono flex items-center gap-2 ${activeTab === 'code' ? 'bg-slate-900 text-brand-400 border-t-2 border-brand-400' : 'text-slate-400 hover:bg-slate-900'}`}
+                    >
+                        <Code size={14} /> Manim.py
+                    </button>
                 </div>
-              </div>
-              
-              <div className="flex-1 overflow-y-auto space-y-2 pr-2 scrollbar-thin scrollbar-thumb-slate-700">
-                {logs.length === 0 && (
-                  <div className="text-slate-600 italic">Waiting for job submission...</div>
-                )}
-                {logs.map((log) => (
-                  <div key={log.id} className="flex gap-3 animate-fade-in">
-                    <span className="text-slate-500 min-w-[60px]">{new Date(log.timestamp).toLocaleTimeString([], {hour12:false, minute:'2-digit', second:'2-digit'})}</span>
-                    <span className={`font-bold min-w-[140px] ${
-                      log.stage === AgentStage.ERROR ? 'text-red-400' : 'text-brand-400'
-                    }`}>[{log.stage}]</span>
-                    <span className={`${
-                      log.status === 'success' ? 'text-green-400' : 
-                      log.status === 'warning' ? 'text-yellow-400' : 'text-slate-300'
-                    }`}>{log.message}</span>
-                  </div>
-                ))}
-                {status === PipelineStatus.COMPLETED && (
-                    <div className="mt-4 border-t border-slate-800 pt-4 text-green-400 font-bold animate-pulse">
-                        &gt; SYSTEM READY. PLEASE ENTER SESSION.
-                    </div>
-                )}
-                <div ref={logsEndRef} />
-              </div>
-            </div>
 
+                <div className="flex-1 overflow-auto p-4 font-mono text-sm">
+                    {activeTab === 'logs' && (
+                        <div className="space-y-2">
+                             {logs.length === 0 && <div className="text-slate-600 italic">Ready to start pipeline...</div>}
+                             {logs.map((log) => (
+                                <div key={log.id} className="flex gap-3 animate-fade-in">
+                                    <span className="text-slate-500 min-w-[60px]">{new Date(log.timestamp).toLocaleTimeString([], {minute:'2-digit', second:'2-digit'})}</span>
+                                    <span className={`font-bold min-w-[140px] text-brand-400`}>[{log.stage}]</span>
+                                    <span className="text-slate-300">{log.message}</span>
+                                </div>
+                             ))}
+                             <div ref={logsEndRef} />
+                        </div>
+                    )}
+
+                    {activeTab === 'script' && (
+                        <div className="text-slate-300 whitespace-pre-wrap">
+                            {artifacts.script || <span className="text-slate-600 italic">Script not generated yet.</span>}
+                        </div>
+                    )}
+
+                    {activeTab === 'code' && (
+                        <div className="text-blue-300 whitespace-pre-wrap">
+                            {artifacts.manimCode || <span className="text-slate-600 italic">Code not generated yet.</span>}
+                        </div>
+                    )}
+                </div>
+            </div>
         </div>
       </div>
     </div>

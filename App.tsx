@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AppView, SavedSession, ChatMessage } from './types';
+import { AppView, SavedSession, ChatMessage, GeneratedArtifacts, SemanticVideoData } from './types';
 import GeneratorView from './components/GeneratorView';
 import PlayerView from './components/PlayerView';
 
@@ -8,15 +8,23 @@ const App: React.FC = () => {
   const [activeSession, setActiveSession] = useState<SavedSession | null>(null);
   const [history, setHistory] = useState<SavedSession[]>([]);
 
-  // Called when a NEW video is uploaded
-  const handleNewSession = (file: File) => {
+  // Called when a NEW video is uploaded or generated
+  const handleNewSession = (
+      file: File | null, 
+      artifacts?: GeneratedArtifacts, 
+      videoUrl?: string,
+      semanticData?: SemanticVideoData
+    ) => {
     const newSession: SavedSession = {
       id: Date.now().toString(),
-      videoFile: file,
-      videoName: file.name,
+      videoFile: file || undefined,
+      videoUrl: videoUrl,
+      videoName: file?.name || "Generated Video",
       timestamp: Date.now(),
       chatHistory: [],
-      lastAccessed: Date.now()
+      lastAccessed: Date.now(),
+      artifacts: artifacts,
+      semanticData: semanticData
     };
     
     setHistory(prev => [newSession, ...prev]);
