@@ -19,13 +19,19 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 3, baseDelay = 1000)
       (error.message && (
         error.message.includes('xhr error') || 
         error.message.includes('fetch failed') ||
-        error.message.includes('Rpc failed')
+        error.message.includes('Rpc failed') ||
+        error.message.includes('NetworkError')
       ));
 
     if (retries > 0 && isNetworkOrServerError) {
       console.warn(`API Error (${error.message}). Retrying in ${baseDelay}ms... (Attempts left: ${retries})`);
       await new Promise(resolve => setTimeout(resolve, baseDelay));
       return withRetry(fn, retries - 1, baseDelay * 2);
+    }
+    
+    // Provide a more helpful error if it looks like a block
+    if (error.message && (error.message.includes('xhr error') || error.message.includes('Rpc failed'))) {
+        console.error("Connection Blocked: This error often indicates an AdBlocker or Firewall is preventing access to Google AI services.");
     }
     throw error;
   }
@@ -189,6 +195,15 @@ export const generateStructuredResponse = async (
   } catch (error: any) {
     console.error("Gemini Q&A Error:", error);
     const errorMsg = error.message || "Unknown error";
+    
+    // Check specifically for the xhr error 6
+    if (errorMsg.includes("xhr error") || errorMsg.includes("code: 6")) {
+        return {
+            title: "Network Error",
+            answer: "Unable to connect to Google AI services. This is often caused by AdBlockers or privacy extensions. Please pause them and try again.",
+        };
+    }
+
     return {
       title: "Connection Error",
       answer: `Failed to reach the reasoning engine. (${errorMsg})`,
