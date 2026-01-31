@@ -234,6 +234,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   const [duration, setDuration] = useState(0);
   const [videoSrc, setVideoSrc] = useState(DEFAULT_VIDEO);
   const [isHudOpen, setIsHudOpen] = useState(true); // Control visibility of telemetry details
+  const [hudPosition, setHudPosition] = useState<{x: number, y: number} | null>(null);
   
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawingPoints, setDrawingPoints] = useState<Point[]>([]); 
@@ -245,18 +246,21 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   
   const [isLiveActive, setIsLiveActive] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [micVolume, setMicVolume] = useState(0);
   const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null);
   
   const liveSessionRef = useRef<LiveSession | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
   const currentVoiceMessageIdRef = useRef<string | null>(null);
+  const dragOffsetRef = useRef<{x: number, y: number}>({ x: 0, y: 0 });
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null); 
   const containerRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const hudContainerRef = useRef<HTMLDivElement>(null);
 
   // --- Derived Semantic State ---
   const semanticData = session?.semanticData || MOCK_SCENE_DATA;
@@ -456,6 +460,47 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     }
   };
 
+  // --- HUD Dragging Logic ---
+  const startHudDrag = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      
+      const container = hudContainerRef.current;
+      const videoArea = containerRef.current; 
+      if (!container || !videoArea) return;
+      
+      const containerRect = container.getBoundingClientRect();
+      const videoRect = videoArea.getBoundingClientRect();
+      
+      // Calculate initial offset within the HUD container
+      const offsetX = e.clientX - containerRect.left;
+      const offsetY = e.clientY - containerRect.top;
+      dragOffsetRef.current = { x: offsetX, y: offsetY };
+      
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+           // Calculate new position relative to video container
+           let newLeft = moveEvent.clientX - videoRect.left - dragOffsetRef.current.x;
+           let newTop = moveEvent.clientY - videoRect.top - dragOffsetRef.current.y;
+
+           // Simple bounds checking
+           const maxLeft = videoRect.width - containerRect.width;
+           const maxTop = videoRect.height - 40; // Allow partial bottom overlap but keep header visible
+
+           newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+           newTop = Math.max(0, Math.min(newTop, maxTop));
+           
+           setHudPosition({ x: newLeft, y: newTop });
+      };
+      
+      const handleMouseUp = () => {
+           document.removeEventListener('mousemove', handleMouseMove);
+           document.removeEventListener('mouseup', handleMouseUp);
+      };
+      
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+  };
+
   const captureAndSendFrameToLive = () => {
     if (!liveSessionRef.current) return;
     const base64 = getFrameAsBase64();
@@ -510,6 +555,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       if (!isApiKeyAvailable()) { alert("API Key missing."); return; }
       if (hasMicPermission === false) { alert("Mic permission denied."); return; }
 
+      setIsConnecting(true);
       try {
         const placeholderId = Date.now().toString();
         currentVoiceMessageIdRef.current = placeholderId;
@@ -521,7 +567,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
             isVoice: true
         }]);
 
-        const session = new LiveSession(
+        const newLiveSession = new LiveSession(
             (text, isUser) => {
                 setChatHistory(prev => {
                     const currentId = currentVoiceMessageIdRef.current;
@@ -548,21 +594,42 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                     }];
                 });
             },
-            (vol) => setMicVolume(Math.min(1, vol * 5)) 
+            (vol) => setMicVolume(Math.min(1, vol * 5)),
+            () => { // onClose
+                setIsLiveActive(false);
+                setIsConnecting(false);
+                setMicVolume(0);
+                currentVoiceMessageIdRef.current = null;
+                // Stop frame interval
+                if (frameIntervalRef.current) {
+                    window.clearInterval(frameIntervalRef.current);
+                    frameIntervalRef.current = null;
+                }
+            }
         );
 
-        await session.connect();
-        liveSessionRef.current = session;
+        // Customize system instructions based on video content
+        const systemPrompt = `You are a helpful AI tutor watching a video named "${session?.videoName || 'Untitled'}" with the user.
+        Answer their questions about the visual content. Keep your answers concise, conversational, and encouraging.
+        If the user asks about specific visual elements, describe them based on the images sent to you.`;
+
+        await newLiveSession.connect(systemPrompt);
+        
+        liveSessionRef.current = newLiveSession;
         setIsLiveActive(true);
+        setIsConnecting(false);
         if (videoRef.current) {
             videoRef.current.pause();
             setIsPlaying(false);
         }
-        frameIntervalRef.current = window.setInterval(captureAndSendFrameToLive, 1000);
+        
+        // Start sending frames periodically (every 1.5s is a good balance for bandwidth/latency)
+        frameIntervalRef.current = window.setInterval(captureAndSendFrameToLive, 1500);
       } catch (err) {
         console.error(err);
+        setIsConnecting(false);
         setChatHistory(prev => prev.filter(m => m.content !== "Listening..."));
-        alert("Failed to connect to Gemini Live.");
+        alert("Failed to connect to Gemini Live. Please try again.");
       }
     }
   };
@@ -598,11 +665,18 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
             <video ref={videoRef} src={videoSrc} className="w-full h-full object-contain" onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)} onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)} controls={false} onClick={togglePlay} crossOrigin="anonymous"/>
             
             {/* --- SEMANTIC TELEMETRY DECK (HUD) --- */}
-            <div className="absolute top-20 right-6 z-30 pointer-events-none flex flex-col items-end gap-3 w-72 transition-all duration-300">
+            <div 
+              ref={hudContainerRef}
+              className={`absolute z-30 flex flex-col items-end gap-3 w-72 transition-opacity duration-300 ${isHudOpen ? '' : 'pointer-events-none'}`}
+              style={hudPosition ? { left: hudPosition.x, top: hudPosition.y } : { top: '5rem', right: '1.5rem' }}
+            >
                 
                 {/* 1. Timer Panel with Toggle */}
-                <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl px-4 py-3 shadow-2xl flex items-center justify-between gap-3 w-full pointer-events-auto transition-all hover:bg-slate-900/90">
-                    <div className="flex items-center gap-3">
+                <div 
+                  onMouseDown={startHudDrag}
+                  className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl px-4 py-3 shadow-2xl flex items-center justify-between gap-3 w-full pointer-events-auto transition-all hover:bg-slate-900/90 cursor-move"
+                >
+                    <div className="flex items-center gap-3 pointer-events-none">
                         <Clock size={18} className="text-brand-500" />
                         <span className="font-mono text-xl font-bold text-white tabular-nums tracking-tight leading-none">
                             <span className="text-slate-500 font-medium text-sm mr-1.5">t=</span>
@@ -611,8 +685,9 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                         </span>
                     </div>
                     <button 
-                        onClick={() => setIsHudOpen(!isHudOpen)}
-                        className="p-1.5 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                        onClick={(e) => { e.stopPropagation(); setIsHudOpen(!isHudOpen); }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        className="p-1.5 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
                         title={isHudOpen ? "Hide Details" : "Show Details"}
                     >
                         {isHudOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -624,24 +699,30 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                     
                     {/* 2. Scene Context Panel */}
                     {currentScene && (
-                        <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl px-4 py-3 shadow-2xl w-full">
-                            <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-700/50">
+                        <div 
+                          onMouseDown={startHudDrag}
+                          className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl px-4 py-3 shadow-2xl w-full cursor-move pointer-events-auto"
+                        >
+                            <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-700/50 pointer-events-none">
                                 <LayoutTemplate size={14} className="text-purple-400" />
                                 <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Scene {currentScene.scene_id}</span>
                             </div>
-                            <h3 className="font-bold text-sm text-white leading-tight mb-1">{currentScene.visual_context.layout.strategy_name}</h3>
-                            <p className="text-[10px] text-slate-400 leading-relaxed line-clamp-2">{currentScene.visual_context.layout.description}</p>
+                            <h3 className="font-bold text-sm text-white leading-tight mb-1 pointer-events-none">{currentScene.visual_context.layout.strategy_name}</h3>
+                            <p className="text-[10px] text-slate-400 leading-relaxed line-clamp-2 pointer-events-none">{currentScene.visual_context.layout.description}</p>
                         </div>
                     )}
 
                      {/* 3. Active Actions Panel */}
                      {activeActions.length > 0 && (
-                        <div className="bg-slate-900/80 backdrop-blur-md border border-brand-500/30 rounded-xl px-4 py-3 shadow-2xl w-full">
-                            <div className="flex items-center gap-2 mb-2">
+                        <div 
+                          onMouseDown={startHudDrag}
+                          className="bg-slate-900/80 backdrop-blur-md border border-brand-500/30 rounded-xl px-4 py-3 shadow-2xl w-full cursor-move pointer-events-auto"
+                        >
+                            <div className="flex items-center gap-2 mb-2 pointer-events-none">
                                  <Zap size={14} className="text-yellow-400 animate-pulse" />
                                  <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Active Events</span>
                             </div>
-                            <div className="space-y-2">
+                            <div className="space-y-2 pointer-events-none">
                                 {activeActions.map(action => (
                                     <div key={action.action_id} className="flex flex-col gap-0.5 animate-pulse">
                                         <div className="flex items-center justify-between">
@@ -659,9 +740,12 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
 
                     {/* 4. Component Inspector (Math Objects) */}
                     {currentScene && (
-                        <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl p-3 shadow-2xl w-full max-h-[30vh] overflow-y-auto scrollbar-hide">
-                             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Active Components</div>
-                             <div className="space-y-2">
+                        <div 
+                          onMouseDown={startHudDrag}
+                          className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl p-3 shadow-2xl w-full max-h-[30vh] overflow-y-auto scrollbar-hide cursor-move pointer-events-auto"
+                        >
+                             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2 pointer-events-none">Active Components</div>
+                             <div className="space-y-2 pointer-events-none">
                                 {currentScene.visual_context.components.map((comp, idx) => (
                                     <div key={idx} className={`text-xs p-2 rounded bg-slate-800/50 border border-slate-700/30 ${activeActions.some(a => a.targets.includes(comp.name)) ? 'border-brand-500/50 bg-brand-900/20' : ''}`}>
                                         <div className="flex justify-between mb-1">
@@ -700,10 +784,14 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
             {drawingPoints.length > 0 && <button onClick={clearDrawing} className="absolute top-4 right-4 z-30 bg-black/50 p-2 rounded-full pointer-events-auto hover:bg-black/70 transition-colors"><Eraser size={16} /></button>}
             
             {/* Live Indicator */}
-            {isLiveActive && (
+            {(isLiveActive || isConnecting) && (
                 <div className="absolute top-4 right-16 z-30 flex items-center gap-3 bg-slate-900/80 backdrop-blur px-4 py-2 rounded-full border border-slate-700">
-                    <div className="flex items-center gap-1.5"><span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span><span className="text-xs font-bold text-white tracking-wide">LIVE</span></div>
-                    <div className="flex items-end gap-0.5 h-4 w-12">{[0,1,2,3,4].map(i => <div key={i} className="w-2 bg-brand-500 rounded-sm transition-all" style={{height:`${Math.max(20, Math.min(100, micVolume*100*(1+i/2)))}%`}}></div>)}</div>
+                    <div className="flex items-center gap-1.5">
+                        <span className={`animate-ping absolute inline-flex h-2 w-2 rounded-full opacity-75 ${isConnecting ? 'bg-yellow-400' : 'bg-red-400'}`}></span>
+                        <span className={`relative inline-flex rounded-full h-2 w-2 ${isConnecting ? 'bg-yellow-500' : 'bg-red-500'}`}></span>
+                        <span className="text-xs font-bold text-white tracking-wide">{isConnecting ? 'CONNECTING...' : 'LIVE'}</span>
+                    </div>
+                    {!isConnecting && <div className="flex items-end gap-0.5 h-4 w-12">{[0,1,2,3,4].map(i => <div key={i} className="w-2 bg-brand-500 rounded-sm transition-all" style={{height:`${Math.max(20, Math.min(100, micVolume*100*(1+i/2)))}%`}}></div>)}</div>}
                 </div>
             )}
           </div>
@@ -766,13 +854,13 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
 
            <div className="p-4 border-t border-slate-800 bg-slate-900 shrink-0">
              <div className="flex items-center gap-2 mb-2">
-                <button onClick={toggleLiveMode} className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${isLiveActive ? 'bg-red-500/10 text-red-500 border border-red-500/50' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
-                  {isLiveActive ? "Stop Voice Session" : <><Mic size={16} /> Live Voice Mode</>}
+                <button onClick={toggleLiveMode} disabled={isConnecting} className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${isLiveActive ? 'bg-red-500/10 text-red-500 border border-red-500/50' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'} disabled:opacity-50 disabled:cursor-not-allowed`}>
+                  {isConnecting ? <><Loader2 size={16} className="animate-spin"/> Connecting...</> : isLiveActive ? "Stop Voice Session" : <><Mic size={16} /> Live Voice Mode</>}
                 </button>
              </div>
              <div className="relative">
-               <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleTextQuery(inputText)} placeholder={isLiveActive ? "Speak now..." : "Ask a question about the video..."} className="w-full bg-slate-800 text-white rounded-lg pl-4 pr-12 py-3 text-sm focus:ring-2 focus:ring-brand-500 outline-none placeholder-slate-500" disabled={isLiveActive}/>
-               <button onClick={() => handleTextQuery(inputText)} disabled={!inputText.trim() || isLiveActive} className="absolute right-2 top-1/2 transform -translate-y-1/2 p-1.5 text-brand-400 hover:text-brand-300 disabled:text-slate-600"><Send size={18} /></button>
+               <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleTextQuery(inputText)} placeholder={isLiveActive ? "Speak now..." : "Ask a question about the video..."} className="w-full bg-slate-800 text-white rounded-lg pl-4 pr-12 py-3 text-sm focus:ring-2 focus:ring-brand-500 outline-none placeholder-slate-500" disabled={isLiveActive || isConnecting}/>
+               <button onClick={() => handleTextQuery(inputText)} disabled={!inputText.trim() || isLiveActive || isConnecting} className="absolute right-2 top-1/2 transform -translate-y-1/2 p-1.5 text-brand-400 hover:text-brand-300 disabled:text-slate-600"><Send size={18} /></button>
              </div>
            </div>
         </div>
