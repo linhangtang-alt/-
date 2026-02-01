@@ -165,32 +165,26 @@ const formatTime = (seconds: number) => {
 interface SidebarVoicePanelProps {
     session: LiveSession | null;
     isConnecting: boolean;
-    micVolume: number;
     transcript: string | null;
     onClose: () => void;
 }
 
-const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnecting, micVolume, transcript, onClose }) => {
+const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnecting, transcript, onClose }) => {
     const [aiVol, setAiVol] = useState(0);
-    const micVolRef = useRef(0);
-
-    // Keep ref in sync without triggering effect re-runs
-    useEffect(() => {
-        micVolRef.current = micVolume;
-    }, [micVolume]);
 
     // Animation Loop for Smooth Visualizer
     useEffect(() => {
         let rafId: number;
         const loop = () => {
             if (session) {
-                // Combine Output Volume (AI) and Input Volume (Mic) for the visualizer
+                // Poll volume levels directly from the audio graph (high performance)
                 const outputVol = session.getOutputVolume();
-                const inputVol = micVolRef.current;
+                const inputVol = session.getInputVolume();
                 
-                // We use a smoothed blend of AI volume and Mic volume for visual feedback
-                const combinedVol = Math.max(outputVol, inputVol * 0.8);
-                setAiVol(prev => prev * 0.8 + combinedVol * 0.2);
+                // Combine them for the visualizer. Max ensures either party speaking animates the orb.
+                // Weight input slightly more for immediate feedback.
+                const combinedVol = Math.max(outputVol, inputVol * 1.5);
+                setAiVol(prev => prev * 0.85 + combinedVol * 0.15);
             }
             rafId = requestAnimationFrame(loop);
         };
@@ -199,55 +193,75 @@ const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnec
     }, [session]);
 
     return (
-        <div className="flex flex-col gap-3 p-4 bg-slate-800 rounded-xl border border-brand-500/30 shadow-lg animate-in slide-in-from-bottom-2">
-            <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-brand-300 uppercase tracking-wider flex items-center gap-2">
-                    {isConnecting ? (
-                        <><Loader2 size={12} className="animate-spin"/> Connecting...</>
-                    ) : (
-                        <><Activity size={12} className={aiVol > 0.05 ? "animate-pulse" : ""}/> Live Session</>
-                    )}
-                </span>
-                <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors"><X size={14}/></button>
-            </div>
+        <div className="flex flex-col gap-4 p-6 bg-slate-900/90 rounded-2xl border border-indigo-500/30 shadow-2xl animate-in slide-in-from-bottom-4 relative overflow-hidden group">
             
-            {/* Visualizer & Transcript Preview */}
-            <div className="bg-slate-900 rounded-lg flex flex-col items-center justify-center relative overflow-hidden border border-slate-700/50 min-h-[5rem]">
-                 
-                 {/* Visualizer Orb */}
-                 <div className="relative py-4 flex flex-col items-center justify-center">
-                     <div 
-                        className={`w-10 h-10 rounded-full transition-all duration-75 shadow-[0_0_20px_rgba(147,51,234,0.3)] z-10
-                            ${isConnecting ? 'bg-slate-700 animate-pulse' : 'bg-gradient-to-br from-brand-500 to-purple-600'}
-                        `}
-                        style={{ transform: `scale(${1 + aiVol * 2.5})` }}
-                     />
-                     {/* Outer Ring */}
-                     <div className="absolute top-4 left-0 right-0 mx-auto w-10 h-10 border border-brand-500/30 rounded-full opacity-50 transition-all duration-75" 
-                          style={{ transform: `scale(${1 + aiVol})` }} 
-                     />
-                     
-                     {!isConnecting && !transcript && aiVol < 0.05 && (
-                         <span className="text-[9px] text-slate-500 font-mono mt-6 animate-pulse">Listening...</span>
-                     )}
+            {/* Ambient Background Effects */}
+            <div className={`absolute top-0 left-0 w-full h-full bg-gradient-to-br from-indigo-900/20 to-purple-900/20 transition-opacity duration-1000 ${isConnecting ? 'opacity-50' : 'opacity-100'}`} />
+            <div className={`absolute -top-10 -left-10 w-32 h-32 bg-indigo-500/30 rounded-full blur-3xl transition-all duration-1000 ${!isConnecting ? 'scale-150 opacity-40' : 'scale-100 opacity-20'}`} />
+            <div className={`absolute -bottom-10 -right-10 w-32 h-32 bg-purple-500/30 rounded-full blur-3xl transition-all duration-1000 ${!isConnecting ? 'scale-150 opacity-40' : 'scale-100 opacity-20'}`} />
+
+            <div className="relative z-10 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${isConnecting ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 animate-ping'}`} />
+                    <span className="text-xs font-bold text-slate-200 tracking-widest uppercase">
+                        {isConnecting ? "Connecting..." : "Live Session"}
+                    </span>
+                </div>
+                <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors bg-white/5 p-1.5 rounded-full hover:bg-white/10">
+                    <X size={14}/>
+                </button>
+            </div>
+
+            {/* Main Visualizer Orb */}
+            <div className="relative z-10 flex flex-col items-center justify-center py-6 min-h-[160px]">
+                 {/* Central Animated Sphere */}
+                 <div 
+                    className={`relative w-24 h-24 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(99,102,241,0.3)] transition-all duration-300 border-2 
+                    ${isConnecting ? 'bg-slate-800 border-slate-700' : 'bg-gradient-to-br from-indigo-600 to-purple-700 border-indigo-400/50'}`}
+                    style={{ transform: `scale(${1 + Math.min(aiVol * 0.8, 0.3)})` }}
+                 >
+                    {isConnecting ? (
+                        <Loader2 className="text-slate-500 animate-spin" size={24} />
+                    ) : (
+                        // Audio Wave Bars simulation
+                        <div className="flex gap-1 items-center h-10">
+                            <div className="w-1 bg-white/90 rounded-full animate-[bounce_1s_infinite_0s]" style={{ height: `${20 + aiVol * 60}%` }} />
+                            <div className="w-1 bg-white/90 rounded-full animate-[bounce_1s_infinite_0.1s]" style={{ height: `${35 + aiVol * 80}%` }} />
+                            <div className="w-1 bg-white/90 rounded-full animate-[bounce_1s_infinite_0.2s]" style={{ height: `${50 + aiVol * 100}%` }} />
+                            <div className="w-1 bg-white/90 rounded-full animate-[bounce_1s_infinite_0.15s]" style={{ height: `${30 + aiVol * 70}%` }} />
+                        </div>
+                    )}
+                    
+                    {/* Ring Ripples */}
+                    {!isConnecting && (
+                        <>
+                           <div className="absolute inset-0 rounded-full border border-indigo-400/30 animate-ping opacity-20" style={{ animationDuration: '2s' }} />
+                           <div className="absolute inset-0 rounded-full border border-purple-400/30 animate-ping opacity-20" style={{ animationDuration: '3s', animationDelay: '0.5s' }} />
+                        </>
+                    )}
                  </div>
 
-                 {/* Mini Transcript Preview (if available) */}
-                 {transcript && (
-                     <div className="w-full px-3 pb-2 text-center animate-in fade-in slide-in-from-bottom-1 z-20">
-                         <p className="text-[10px] text-slate-300 font-medium leading-tight line-clamp-2 bg-slate-800/80 backdrop-blur-sm rounded px-2 py-1 border border-slate-700/50">
+                 <div className="mt-6 text-center h-12 flex items-center justify-center w-full px-2">
+                    {transcript ? (
+                        <p className="text-sm font-medium text-white/90 leading-tight text-center animate-in fade-in slide-in-from-bottom-2 bg-black/30 backdrop-blur-sm px-3 py-2 rounded-xl border border-white/5 line-clamp-2">
                              "{transcript}"
-                         </p>
-                     </div>
-                 )}
+                        </p>
+                    ) : (
+                        !isConnecting && (
+                            <span className="text-xs text-indigo-300/70 font-mono animate-pulse">
+                                Listening...
+                            </span>
+                        )
+                    )}
+                 </div>
             </div>
 
-            <div className="text-center">
+            <div className="relative z-10 pt-2 border-t border-white/5">
                  <button 
                     onClick={onClose}
-                    className="w-full py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg text-xs font-bold uppercase tracking-wide flex items-center justify-center gap-2 transition-all"
+                    className="w-full py-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 rounded-xl text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98]"
                  >
-                    <StopCircle size={14} /> End Voice Mode
+                    <StopCircle size={16} /> End Session
                  </button>
             </div>
         </div>
@@ -341,7 +355,11 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   const [isLiveActive, setIsLiveActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null);
-  const [micVolume, setMicVolume] = useState(0); // Track mic volume for visualization
+  
+  const [volume, setVolume] = useState(1.0);
+  const [isMuted, setIsMuted] = useState(false);
+  
+  // REMOVED micVolume state - handled via polling now for performance
   const [currentTranscript, setCurrentTranscript] = useState<string | null>(null); // Track immediate transcript
   
   const liveSessionRef = useRef<LiveSession | null>(null);
@@ -448,6 +466,14 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     };
   }, []);
 
+  // --- Volume Sync Effect ---
+  useEffect(() => {
+      if (videoRef.current) {
+          videoRef.current.volume = isMuted ? 0 : volume;
+          videoRef.current.muted = isMuted;
+      }
+  }, [volume, isMuted]);
+
   const stopLiveSession = () => {
     if (frameIntervalRef.current) {
         window.clearInterval(frameIntervalRef.current);
@@ -456,7 +482,6 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     // Update state immediately to make UI responsive
     setIsLiveActive(false);
     setIsConnecting(false);
-    setMicVolume(0);
     setCurrentTranscript(null);
     currentVoiceMessageIdRef.current = null;
 
@@ -488,6 +513,17 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       setCurrentTime(time);
       setPreciseTime(time); // Stage 0: Immediate update on seek
     }
+  };
+
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newVol = parseFloat(e.target.value);
+    setVolume(newVol);
+    if (isMuted && newVol > 0) setIsMuted(false);
+  };
+
+  const toggleMute = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setIsMuted(!isMuted);
   };
 
   const toggleDrawingMode = () => {
@@ -686,7 +722,6 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                    }
                 });
             },
-            (vol) => setMicVolume(Math.min(1, vol * 5)), // Capture Mic Volume
             () => { // onClose
                 stopLiveSession();
             }
@@ -853,7 +888,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                 <div className="absolute bottom-24 left-1/2 transform -translate-x-1/2 max-w-2xl w-full px-6 text-center pointer-events-none z-30">
                      <div className="inline-block bg-black/60 backdrop-blur-sm px-6 py-3 rounded-2xl shadow-lg border border-white/10 animate-in slide-in-from-bottom-2 fade-in duration-300">
                          <p className="text-lg md:text-xl font-medium text-white drop-shadow-md leading-relaxed">
-                            <ReactMarkdown className="inline" components={{p: React.Fragment}}>{currentLine.text}</ReactMarkdown>
+                            <ReactMarkdown components={{p: ({children}) => <>{children}</>}}>{currentLine.text}</ReactMarkdown>
                          </p>
                      </div>
                 </div>
@@ -873,6 +908,28 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                 <input type="range" min="0" max={duration || 100} value={currentTime} onChange={handleSeek} className="flex-1 h-1 bg-slate-600 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:bg-brand-500 hover:[&::-webkit-slider-thumb]:bg-brand-400 transition-all"/>
                 <span className="text-xs font-mono text-slate-300 w-10">{formatTime(duration)}</span>
              </div>
+
+             {/* Volume Controls */}
+             <div className="flex items-center gap-2 mx-2">
+                 <button onClick={toggleMute} className="text-white hover:text-brand-400 transition-colors p-1">
+                     {isMuted || volume === 0 ? <VolumeX size={20}/> : <Volume2 size={20}/>}
+                 </button>
+                 <div className="w-20 flex items-center">
+                     <input 
+                         type="range" 
+                         min="0" 
+                         max="1" 
+                         step="0.05" 
+                         value={isMuted ? 0 : volume} 
+                         onChange={handleVolumeChange} 
+                         className="w-full h-1 bg-slate-600 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:bg-brand-500 hover:[&::-webkit-slider-thumb]:bg-brand-400 transition-all"
+                     />
+                 </div>
+                 <span className="text-xs font-mono text-slate-400 w-9 text-right">
+                     {isMuted ? '0%' : `${Math.round(volume * 100)}%`}
+                 </span>
+             </div>
+
              <button onClick={toggleDrawingMode} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${mode === 'draw' ? 'bg-brand-600 text-white shadow-lg' : 'bg-white/10 text-slate-300 hover:bg-white/20'}`}>
                 <BoxSelect size={18} /> {mode === 'draw' ? 'Active' : 'Draw'}
              </button>
@@ -926,7 +983,6 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                  <SidebarVoicePanel 
                     session={liveSessionRef.current} 
                     isConnecting={isConnecting} 
-                    micVolume={micVolume}
                     transcript={currentTranscript}
                     onClose={toggleLiveMode}
                  />

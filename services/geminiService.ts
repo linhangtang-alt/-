@@ -240,23 +240,21 @@ export class LiveSession {
   private sessionPromise: Promise<any> | null = null;
   private inputAudioContext: AudioContext | null = null;
   private outputAudioContext: AudioContext | null = null;
-  private analyser: AnalyserNode | null = null; // For visualization
+  private inputAnalyser: AnalyserNode | null = null;
+  private outputAnalyser: AnalyserNode | null = null; 
   private mediaStream: MediaStream | null = null;
   private processor: ScriptProcessorNode | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private nextStartTime = 0;
   private sources = new Set<AudioBufferSourceNode>();
   private onMessageCallback: (text: string, isUser: boolean) => void;
-  private onVolumeCallback: (volume: number) => void;
   private onCloseCallback: () => void;
 
   constructor(
       onMessage: (text: string, isUser: boolean) => void, 
-      onVolume?: (volume: number) => void,
       onClose?: () => void
   ) {
     this.onMessageCallback = onMessage;
-    this.onVolumeCallback = onVolume || (() => {});
     this.onCloseCallback = onClose || (() => {});
     this.ai = new GoogleGenAI({ apiKey: API_KEY || '' });
   }
@@ -264,26 +262,26 @@ export class LiveSession {
   async connect(systemInstruction: string = "You are a helpful AI tutor.") {
     if (!API_KEY) throw new Error("No API Key");
 
-    // 1. Output Context: 24kHz (Matches Gemini's Native Output for high quality)
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    this.outputAudioContext = new AudioContextClass({ sampleRate: 24000 });
     
-    // Create Analyser for visualization
-    this.analyser = this.outputAudioContext.createAnalyser();
-    this.analyser.fftSize = 256;
-    this.analyser.smoothingTimeConstant = 0.5;
-    this.analyser.connect(this.outputAudioContext.destination);
+    // 1. Output Context: 24kHz
+    this.outputAudioContext = new AudioContextClass({ sampleRate: 24000 });
+    this.outputAnalyser = this.outputAudioContext.createAnalyser();
+    this.outputAnalyser.fftSize = 256;
+    this.outputAnalyser.smoothingTimeConstant = 0.5;
+    this.outputAnalyser.connect(this.outputAudioContext.destination);
 
-    // 2. Input Context: 16kHz (Matches Gemini's Required Input)
-    // We explicitly request 16kHz to avoid resampling artifacts if possible.
+    // 2. Input Context: 16kHz
     this.inputAudioContext = new AudioContextClass({ sampleRate: 16000 });
+    this.inputAnalyser = this.inputAudioContext.createAnalyser();
+    this.inputAnalyser.fftSize = 256;
+    this.inputAnalyser.smoothingTimeConstant = 0.5;
+    // Do NOT connect inputAnalyser to destination (that would cause self-echo)
 
-    // Resume contexts if suspended (browser requirement for autoplay)
     if (this.outputAudioContext.state === 'suspended') await this.outputAudioContext.resume();
     if (this.inputAudioContext.state === 'suspended') await this.inputAudioContext.resume();
 
-    // 3. Get User Media with Echo Cancellation
-    // We request sampleRate 16000 from the hardware as well.
+    // 3. Get User Media
     this.mediaStream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
             channelCount: 1,
@@ -294,7 +292,6 @@ export class LiveSession {
     });
 
     // 4. Connect to Gemini Live
-    // NOTE: Using the "gemini-2.5-flash-native-audio-preview-12-2025" model as required for Live API
     this.sessionPromise = this.ai.live.connect({
       model: 'gemini-2.5-flash-native-audio-preview-12-2025',
       callbacks: {
@@ -315,13 +312,13 @@ export class LiveSession {
         },
       },
       config: {
-        responseModalities: [Modality.AUDIO], // MUST be AUDIO for Live API
+        responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
         },
         systemInstruction: { parts: [{ text: systemInstruction }] },
-        inputAudioTranscription: {}, // Request transcription of user speech
-        outputAudioTranscription: {}, // Request transcription of model speech
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
       },
     });
 
@@ -330,7 +327,6 @@ export class LiveSession {
 
   public sendImage(base64Data: string) {
     if (!this.sessionPromise) return;
-    // Always use the promise to send data to avoid race conditions
     this.sessionPromise.then((session: any) => {
         try {
             session.sendRealtimeInput({
@@ -345,18 +341,27 @@ export class LiveSession {
     });
   }
 
-  // Poll for current output volume (0.0 to 1.0) for UI visualization
+  // Poll for output volume (AI speaking)
   public getOutputVolume(): number {
-    if (!this.analyser) return 0;
-    const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
-    this.analyser.getByteFrequencyData(dataArray);
+    return this.getVolumeFromAnalyser(this.outputAnalyser);
+  }
+
+  // Poll for input volume (User speaking)
+  public getInputVolume(): number {
+    return this.getVolumeFromAnalyser(this.inputAnalyser);
+  }
+
+  private getVolumeFromAnalyser(analyser: AnalyserNode | null): number {
+    if (!analyser) return 0;
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(dataArray);
     
     let sum = 0;
     for (let i = 0; i < dataArray.length; i++) {
         sum += dataArray[i];
     }
     const average = sum / dataArray.length;
-    return average / 255; // Normalize to 0-1
+    return average / 255;
   }
 
   private startAudioStream() {
@@ -364,7 +369,12 @@ export class LiveSession {
     
     this.source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
     
-    // Use ScriptProcessor for wide browser support without external files
+    // Connect Source -> Analyser (for visualization)
+    if (this.inputAnalyser) {
+        this.source.connect(this.inputAnalyser);
+    }
+
+    // Connect Source -> Processor (for sending to Gemini)
     // Buffer size 4096 gives ~256ms latency at 16kHz
     this.processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
     
@@ -372,19 +382,8 @@ export class LiveSession {
         if (!this.sessionPromise) return;
         
         const inputData = e.inputBuffer.getChannelData(0);
-        
-        // Calculate Volume (RMS) for visualizer (User Input)
-        let sum = 0;
-        for (let i = 0; i < inputData.length; i += 4) {
-            sum += inputData[i] * inputData[i];
-        }
-        const rms = Math.sqrt(sum / (inputData.length / 4));
-        this.onVolumeCallback(rms);
-
-        // Convert Float32 to Int16 PCM for Gemini
         const pcmBase64 = this.createPcmData(inputData);
 
-        // Send to Gemini via the promise to ensure session is ready
         this.sessionPromise.then((session) => {
             try {
                 session.sendRealtimeInput({ 
@@ -403,13 +402,10 @@ export class LiveSession {
     this.processor.connect(this.inputAudioContext.destination);
   }
 
-  // Converts Float32Array (Web Audio API default) to 16-bit PCM Base64 string
-  // Gemini expects Little Endian 16-bit PCM
   private createPcmData(data: Float32Array): string {
     const l = data.length;
     const int16 = new Int16Array(l);
     for (let i = 0; i < l; i++) {
-        // Clamp between -1 and 1 and scale to 16-bit signed integer range
         const s = Math.max(-1, Math.min(1, data[i]));
         int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
@@ -417,7 +413,6 @@ export class LiveSession {
   }
 
   private async handleMessage(message: LiveServerMessage) {
-    // 1. Handle Transcriptions (Text Update)
     if (message.serverContent?.inputTranscription?.text) {
         this.onMessageCallback(message.serverContent.inputTranscription.text, true);
     }
@@ -425,30 +420,20 @@ export class LiveSession {
         this.onMessageCallback(message.serverContent.outputTranscription.text, false);
     }
 
-    // 2. Handle Audio Output (PCM Playback)
     const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-    if (base64Audio && this.outputAudioContext && this.analyser) {
+    if (base64Audio && this.outputAudioContext && this.outputAnalyser) {
         try {
-            // Decode Base64 to ArrayBuffer
             const audioDataBuffer = base64ToArrayBuffer(base64Audio);
-            
-            // Convert Raw PCM to AudioBuffer
             const audioBuffer = this.pcmToAudioBuffer(audioDataBuffer, this.outputAudioContext);
-
-            // Schedule Playback (Gapless)
             const currentTime = this.outputAudioContext.currentTime;
             
-            // If nextStartTime is in the past (underrun), reset it to now to avoid skipping
             if (this.nextStartTime < currentTime) {
                 this.nextStartTime = currentTime;
             }
 
             const source = this.outputAudioContext.createBufferSource();
             source.buffer = audioBuffer;
-            
-            // Connect to Analyser (Visualizer) then to Destination (Speakers)
-            source.connect(this.analyser);
-            
+            source.connect(this.outputAnalyser);
             source.start(this.nextStartTime);
             this.nextStartTime += audioBuffer.duration;
             
@@ -459,7 +444,6 @@ export class LiveSession {
         }
     }
     
-    // 3. Handle Interruption (User spoke, model should stop)
     if (message.serverContent?.interrupted) {
         this.sources.forEach(s => {
             try { s.stop(); } catch(e) {}
@@ -469,7 +453,6 @@ export class LiveSession {
     }
   }
 
-  // Custom PCM decoder: Converts 16-bit Little Endian PCM -> AudioBuffer
   private pcmToAudioBuffer(buffer: ArrayBuffer, ctx: AudioContext): AudioBuffer {
     const dataInt16 = new Int16Array(buffer);
     const float32 = new Float32Array(dataInt16.length);
@@ -478,13 +461,12 @@ export class LiveSession {
         float32[i] = dataInt16[i] / 32768.0;
     }
 
-    const audioBuffer = ctx.createBuffer(1, float32.length, 24000); // Output is 24kHz
+    const audioBuffer = ctx.createBuffer(1, float32.length, 24000); 
     audioBuffer.getChannelData(0).set(float32);
     return audioBuffer;
   }
 
   disconnect() {
-    // Send close frame to server if connected
     if (this.sessionPromise) {
         this.sessionPromise.then((s: any) => {
              try { s.close(); } catch(e) { console.warn("Session already closed"); }
@@ -512,6 +494,7 @@ export class LiveSession {
     }
     this.sources.clear();
     this.sessionPromise = null;
-    this.analyser = null;
+    this.outputAnalyser = null;
+    this.inputAnalyser = null;
   }
 }
