@@ -240,6 +240,7 @@ export class LiveSession {
   private sessionPromise: Promise<any> | null = null;
   private inputAudioContext: AudioContext | null = null;
   private outputAudioContext: AudioContext | null = null;
+  private analyser: AnalyserNode | null = null; // For visualization
   private mediaStream: MediaStream | null = null;
   private processor: ScriptProcessorNode | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
@@ -267,6 +268,12 @@ export class LiveSession {
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     this.outputAudioContext = new AudioContextClass({ sampleRate: 24000 });
     
+    // Create Analyser for visualization
+    this.analyser = this.outputAudioContext.createAnalyser();
+    this.analyser.fftSize = 256;
+    this.analyser.smoothingTimeConstant = 0.5;
+    this.analyser.connect(this.outputAudioContext.destination);
+
     // 2. Input Context: 16kHz (Matches Gemini's Required Input)
     // We explicitly request 16kHz to avoid resampling artifacts if possible.
     this.inputAudioContext = new AudioContextClass({ sampleRate: 16000 });
@@ -338,6 +345,20 @@ export class LiveSession {
     });
   }
 
+  // Poll for current output volume (0.0 to 1.0) for UI visualization
+  public getOutputVolume(): number {
+    if (!this.analyser) return 0;
+    const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+    this.analyser.getByteFrequencyData(dataArray);
+    
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+        sum += dataArray[i];
+    }
+    const average = sum / dataArray.length;
+    return average / 255; // Normalize to 0-1
+  }
+
   private startAudioStream() {
     if (!this.inputAudioContext || !this.mediaStream || !this.sessionPromise) return;
     
@@ -352,7 +373,7 @@ export class LiveSession {
         
         const inputData = e.inputBuffer.getChannelData(0);
         
-        // Calculate Volume (RMS) for visualizer
+        // Calculate Volume (RMS) for visualizer (User Input)
         let sum = 0;
         for (let i = 0; i < inputData.length; i += 4) {
             sum += inputData[i] * inputData[i];
@@ -406,7 +427,7 @@ export class LiveSession {
 
     // 2. Handle Audio Output (PCM Playback)
     const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-    if (base64Audio && this.outputAudioContext) {
+    if (base64Audio && this.outputAudioContext && this.analyser) {
         try {
             // Decode Base64 to ArrayBuffer
             const audioDataBuffer = base64ToArrayBuffer(base64Audio);
@@ -424,7 +445,9 @@ export class LiveSession {
 
             const source = this.outputAudioContext.createBufferSource();
             source.buffer = audioBuffer;
-            source.connect(this.outputAudioContext.destination);
+            
+            // Connect to Analyser (Visualizer) then to Destination (Speakers)
+            source.connect(this.analyser);
             
             source.start(this.nextStartTime);
             this.nextStartTime += audioBuffer.duration;
@@ -489,5 +512,6 @@ export class LiveSession {
     }
     this.sources.clear();
     this.sessionPromise = null;
+    this.analyser = null;
   }
 }

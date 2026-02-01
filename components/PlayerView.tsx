@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { AppView, ChatMessage, SelectionBox, SavedSession, AnswerCardData, SemanticVideoData, SceneData, SceneAction } from '../types';
-import { ArrowLeft, MessageSquare, Mic, MicOff, Send, X, BoxSelect, Play, Pause, Gauge, Volume2, VolumeX, Eraser, Loader2, AlertCircle, CheckCircle2, Activity, ChevronDown, ChevronRight, HelpCircle, Clock, LayoutTemplate, Zap, Subtitles, ChevronUp } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Mic, MicOff, Send, X, BoxSelect, Play, Pause, Gauge, Volume2, VolumeX, Eraser, Loader2, AlertCircle, CheckCircle2, Activity, ChevronDown, ChevronRight, HelpCircle, Clock, LayoutTemplate, Zap, Subtitles, ChevronUp, Radio, StopCircle } from 'lucide-react';
 import { generateStructuredResponse, LiveSession, isApiKeyAvailable } from '../services/geminiService';
 
 // --- MOCK DATA FROM DOCUMENT (FALLBACK) ---
@@ -161,6 +161,99 @@ const formatTime = (seconds: number) => {
   return `${m}:${s.toString().padStart(2, '0')}`;
 };
 
+// --- COMPONENT: Sidebar Voice Panel (Replaces Full Overlay) ---
+interface SidebarVoicePanelProps {
+    session: LiveSession | null;
+    isConnecting: boolean;
+    micVolume: number;
+    transcript: string | null;
+    onClose: () => void;
+}
+
+const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnecting, micVolume, transcript, onClose }) => {
+    const [aiVol, setAiVol] = useState(0);
+    const micVolRef = useRef(0);
+
+    // Keep ref in sync without triggering effect re-runs
+    useEffect(() => {
+        micVolRef.current = micVolume;
+    }, [micVolume]);
+
+    // Animation Loop for Smooth Visualizer
+    useEffect(() => {
+        let rafId: number;
+        const loop = () => {
+            if (session) {
+                // Combine Output Volume (AI) and Input Volume (Mic) for the visualizer
+                const outputVol = session.getOutputVolume();
+                const inputVol = micVolRef.current;
+                
+                // We use a smoothed blend of AI volume and Mic volume for visual feedback
+                const combinedVol = Math.max(outputVol, inputVol * 0.8);
+                setAiVol(prev => prev * 0.8 + combinedVol * 0.2);
+            }
+            rafId = requestAnimationFrame(loop);
+        };
+        loop();
+        return () => cancelAnimationFrame(rafId);
+    }, [session]);
+
+    return (
+        <div className="flex flex-col gap-3 p-4 bg-slate-800 rounded-xl border border-brand-500/30 shadow-lg animate-in slide-in-from-bottom-2">
+            <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-brand-300 uppercase tracking-wider flex items-center gap-2">
+                    {isConnecting ? (
+                        <><Loader2 size={12} className="animate-spin"/> Connecting...</>
+                    ) : (
+                        <><Activity size={12} className={aiVol > 0.05 ? "animate-pulse" : ""}/> Live Session</>
+                    )}
+                </span>
+                <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors"><X size={14}/></button>
+            </div>
+            
+            {/* Visualizer & Transcript Preview */}
+            <div className="bg-slate-900 rounded-lg flex flex-col items-center justify-center relative overflow-hidden border border-slate-700/50 min-h-[5rem]">
+                 
+                 {/* Visualizer Orb */}
+                 <div className="relative py-4 flex flex-col items-center justify-center">
+                     <div 
+                        className={`w-10 h-10 rounded-full transition-all duration-75 shadow-[0_0_20px_rgba(147,51,234,0.3)] z-10
+                            ${isConnecting ? 'bg-slate-700 animate-pulse' : 'bg-gradient-to-br from-brand-500 to-purple-600'}
+                        `}
+                        style={{ transform: `scale(${1 + aiVol * 2.5})` }}
+                     />
+                     {/* Outer Ring */}
+                     <div className="absolute top-4 left-0 right-0 mx-auto w-10 h-10 border border-brand-500/30 rounded-full opacity-50 transition-all duration-75" 
+                          style={{ transform: `scale(${1 + aiVol})` }} 
+                     />
+                     
+                     {!isConnecting && !transcript && aiVol < 0.05 && (
+                         <span className="text-[9px] text-slate-500 font-mono mt-6 animate-pulse">Listening...</span>
+                     )}
+                 </div>
+
+                 {/* Mini Transcript Preview (if available) */}
+                 {transcript && (
+                     <div className="w-full px-3 pb-2 text-center animate-in fade-in slide-in-from-bottom-1 z-20">
+                         <p className="text-[10px] text-slate-300 font-medium leading-tight line-clamp-2 bg-slate-800/80 backdrop-blur-sm rounded px-2 py-1 border border-slate-700/50">
+                             "{transcript}"
+                         </p>
+                     </div>
+                 )}
+            </div>
+
+            <div className="text-center">
+                 <button 
+                    onClick={onClose}
+                    className="w-full py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg text-xs font-bold uppercase tracking-wide flex items-center justify-center gap-2 transition-all"
+                 >
+                    <StopCircle size={14} /> End Voice Mode
+                 </button>
+            </div>
+        </div>
+    );
+};
+
 // --- Module 8: Answer UI Agent (Card Component) ---
 const AnswerCard: React.FC<{ data: AnswerCardData; onQuestionClick: (q: string) => void }> = ({ data, onQuestionClick }) => {
     const [expandedTerm, setExpandedTerm] = useState<string | null>(null);
@@ -247,8 +340,9 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   
   const [isLiveActive, setIsLiveActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [micVolume, setMicVolume] = useState(0);
   const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null);
+  const [micVolume, setMicVolume] = useState(0); // Track mic volume for visualization
+  const [currentTranscript, setCurrentTranscript] = useState<string | null>(null); // Track immediate transcript
   
   const liveSessionRef = useRef<LiveSession | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
@@ -315,10 +409,11 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   }, [chatHistory, session, onUpdateSession]);
 
   useEffect(() => {
+    // Aggressively scroll to bottom during Live Voice Mode or normal interaction
     if (isLiveActive || !userScrolledUp || chatHistory.length <= 1) {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [chatHistory, isLoading, userScrolledUp, isLiveActive]);
+  }, [chatHistory, isLoading, userScrolledUp, isLiveActive, currentTranscript]);
 
   // Stage 0: High-precision time loop
   useEffect(() => {
@@ -358,6 +453,13 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         window.clearInterval(frameIntervalRef.current);
         frameIntervalRef.current = null;
     }
+    // Update state immediately to make UI responsive
+    setIsLiveActive(false);
+    setIsConnecting(false);
+    setMicVolume(0);
+    setCurrentTranscript(null);
+    currentVoiceMessageIdRef.current = null;
+
     if (liveSessionRef.current) {
         try {
             liveSessionRef.current.disconnect();
@@ -548,67 +650,48 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   const toggleLiveMode = async () => {
     if (isLiveActive) {
       stopLiveSession();
-      setIsLiveActive(false);
-      currentVoiceMessageIdRef.current = null;
-      setMicVolume(0);
     } else {
       if (!isApiKeyAvailable()) { alert("API Key missing."); return; }
       if (hasMicPermission === false) { alert("Mic permission denied."); return; }
 
       setIsConnecting(true);
       try {
-        const placeholderId = Date.now().toString();
-        currentVoiceMessageIdRef.current = placeholderId;
-        setChatHistory(prev => [...prev, {
-            id: placeholderId,
-            role: 'user',
-            content: "Listening...",
-            timestamp: Date.now(),
-            isVoice: true
-        }]);
-
         const newLiveSession = new LiveSession(
             (text, isUser) => {
+                // Update short-term transcript preview for visualizer
+                setCurrentTranscript(text);
+                
+                // Update chat history directly so user sees the conversation flow
                 setChatHistory(prev => {
-                    const currentId = currentVoiceMessageIdRef.current;
-                    let newHistory = [...prev];
-                    if (currentId) {
-                        const existingMsgIndex = newHistory.findIndex(m => m.id === currentId);
-                        if (existingMsgIndex !== -1 && newHistory[existingMsgIndex].role === (isUser ? 'user' : 'model')) {
-                            const currentMsg = newHistory[existingMsgIndex];
-                            newHistory[existingMsgIndex] = {
-                                ...currentMsg,
-                                content: isUser ? text : (currentMsg.content as string) + text
-                            };
-                            return newHistory;
-                        }
-                    }
-                    const newId = Date.now().toString();
-                    currentVoiceMessageIdRef.current = newId;
-                    return [...newHistory, {
-                        id: newId,
-                        role: isUser ? 'user' : 'model',
-                        content: text,
-                        timestamp: Date.now(),
-                        isVoice: true
-                    }];
+                   const lastMsg = prev[prev.length - 1];
+                   const role = isUser ? 'user' : 'model';
+                   
+                   // If last message is same role and isVoice, append text (streaming)
+                   if (lastMsg && lastMsg.role === role && lastMsg.isVoice) {
+                       const newHistory = [...prev];
+                       newHistory[newHistory.length - 1] = {
+                           ...lastMsg,
+                           content: (lastMsg.content as string) + text
+                       };
+                       return newHistory;
+                   } else {
+                       // New message
+                       return [...prev, {
+                           id: Date.now().toString(),
+                           role,
+                           content: text,
+                           timestamp: Date.now(),
+                           isVoice: true
+                       }];
+                   }
                 });
             },
-            (vol) => setMicVolume(Math.min(1, vol * 5)),
+            (vol) => setMicVolume(Math.min(1, vol * 5)), // Capture Mic Volume
             () => { // onClose
-                setIsLiveActive(false);
-                setIsConnecting(false);
-                setMicVolume(0);
-                currentVoiceMessageIdRef.current = null;
-                // Stop frame interval
-                if (frameIntervalRef.current) {
-                    window.clearInterval(frameIntervalRef.current);
-                    frameIntervalRef.current = null;
-                }
+                stopLiveSession();
             }
         );
 
-        // Customize system instructions based on video content
         const systemPrompt = `You are a helpful AI tutor watching a video named "${session?.videoName || 'Untitled'}" with the user.
         Answer their questions about the visual content. Keep your answers concise, conversational, and encouraging.
         If the user asks about specific visual elements, describe them based on the images sent to you.`;
@@ -623,12 +706,11 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
             setIsPlaying(false);
         }
         
-        // Start sending frames periodically (every 1.5s is a good balance for bandwidth/latency)
+        // Start sending frames periodically
         frameIntervalRef.current = window.setInterval(captureAndSendFrameToLive, 1500);
       } catch (err) {
         console.error(err);
         setIsConnecting(false);
-        setChatHistory(prev => prev.filter(m => m.content !== "Listening..."));
         alert("Failed to connect to Gemini Live. Please try again.");
       }
     }
@@ -646,7 +728,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   };
 
   return (
-    <div className="flex h-full bg-slate-900 text-white overflow-hidden">
+    <div className="flex h-full bg-slate-900 text-white overflow-hidden relative">
       <div className="absolute top-4 left-4 z-50 flex items-center gap-3">
         <button onClick={() => onNavigate(AppView.GENERATOR)} className="bg-black/50 hover:bg-black/70 p-2 rounded-full text-white backdrop-blur-sm transition flex items-center gap-2 pr-4">
           <ArrowLeft size={20} /> <span className="text-sm font-medium">Project</span>
@@ -670,7 +752,6 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
               className={`absolute z-30 flex flex-col items-end gap-3 w-72 transition-opacity duration-300 ${isHudOpen ? '' : 'pointer-events-none'}`}
               style={hudPosition ? { left: hudPosition.x, top: hudPosition.y } : { top: '5rem', right: '1.5rem' }}
             >
-                
                 {/* 1. Timer Panel with Toggle */}
                 <div 
                   onMouseDown={startHudDrag}
@@ -782,18 +863,6 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                 <path d={getSvgPath()} stroke="#0ea5e9" strokeWidth="3" fill="rgba(14, 165, 233, 0.1)" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-lg"/>
             </svg>
             {drawingPoints.length > 0 && <button onClick={clearDrawing} className="absolute top-4 right-4 z-30 bg-black/50 p-2 rounded-full pointer-events-auto hover:bg-black/70 transition-colors"><Eraser size={16} /></button>}
-            
-            {/* Live Indicator */}
-            {(isLiveActive || isConnecting) && (
-                <div className="absolute top-4 right-16 z-30 flex items-center gap-3 bg-slate-900/80 backdrop-blur px-4 py-2 rounded-full border border-slate-700">
-                    <div className="flex items-center gap-1.5">
-                        <span className={`animate-ping absolute inline-flex h-2 w-2 rounded-full opacity-75 ${isConnecting ? 'bg-yellow-400' : 'bg-red-400'}`}></span>
-                        <span className={`relative inline-flex rounded-full h-2 w-2 ${isConnecting ? 'bg-yellow-500' : 'bg-red-500'}`}></span>
-                        <span className="text-xs font-bold text-white tracking-wide">{isConnecting ? 'CONNECTING...' : 'LIVE'}</span>
-                    </div>
-                    {!isConnecting && <div className="flex items-end gap-0.5 h-4 w-12">{[0,1,2,3,4].map(i => <div key={i} className="w-2 bg-brand-500 rounded-sm transition-all" style={{height:`${Math.max(20, Math.min(100, micVolume*100*(1+i/2)))}%`}}></div>)}</div>}
-                </div>
-            )}
           </div>
 
           {/* Controls */}
@@ -853,15 +922,27 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
            </div>
 
            <div className="p-4 border-t border-slate-800 bg-slate-900 shrink-0">
-             <div className="flex items-center gap-2 mb-2">
-                <button onClick={toggleLiveMode} disabled={isConnecting} className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${isLiveActive ? 'bg-red-500/10 text-red-500 border border-red-500/50' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'} disabled:opacity-50 disabled:cursor-not-allowed`}>
-                  {isConnecting ? <><Loader2 size={16} className="animate-spin"/> Connecting...</> : isLiveActive ? "Stop Voice Session" : <><Mic size={16} /> Live Voice Mode</>}
-                </button>
-             </div>
-             <div className="relative">
-               <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleTextQuery(inputText)} placeholder={isLiveActive ? "Speak now..." : "Ask a question about the video..."} className="w-full bg-slate-800 text-white rounded-lg pl-4 pr-12 py-3 text-sm focus:ring-2 focus:ring-brand-500 outline-none placeholder-slate-500" disabled={isLiveActive || isConnecting}/>
-               <button onClick={() => handleTextQuery(inputText)} disabled={!inputText.trim() || isLiveActive || isConnecting} className="absolute right-2 top-1/2 transform -translate-y-1/2 p-1.5 text-brand-400 hover:text-brand-300 disabled:text-slate-600"><Send size={18} /></button>
-             </div>
+             {isLiveActive || isConnecting ? (
+                 <SidebarVoicePanel 
+                    session={liveSessionRef.current} 
+                    isConnecting={isConnecting} 
+                    micVolume={micVolume}
+                    transcript={currentTranscript}
+                    onClose={toggleLiveMode}
+                 />
+             ) : (
+                 <>
+                    <div className="flex items-center gap-2 mb-2">
+                        <button onClick={toggleLiveMode} disabled={isConnecting} className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${isLiveActive ? 'bg-red-500/10 text-red-500 border border-red-500/50' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'} disabled:opacity-50 disabled:cursor-not-allowed`}>
+                        {isConnecting ? <><Loader2 size={16} className="animate-spin"/> Connecting...</> : isLiveActive ? "Stop Voice Session" : <><Mic size={16} /> Live Voice Mode</>}
+                        </button>
+                    </div>
+                    <div className="relative">
+                        <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleTextQuery(inputText)} placeholder="Ask a question about the video..." className="w-full bg-slate-800 text-white rounded-lg pl-4 pr-12 py-3 text-sm focus:ring-2 focus:ring-brand-500 outline-none placeholder-slate-500" disabled={isLiveActive || isConnecting}/>
+                        <button onClick={() => handleTextQuery(inputText)} disabled={!inputText.trim() || isLiveActive || isConnecting} className="absolute right-2 top-1/2 transform -translate-y-1/2 p-1.5 text-brand-400 hover:text-brand-300 disabled:text-slate-600"><Send size={18} /></button>
+                    </div>
+                 </>
+             )}
            </div>
         </div>
       </div>
