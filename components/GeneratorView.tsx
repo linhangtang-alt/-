@@ -14,6 +14,7 @@ const API_BASE = "http://localhost:8000";
 const GeneratorView: React.FC<GeneratorViewProps> = ({ onNavigate, onVideoUpload, history, onLoadSession }) => {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<PipelineStatus>(PipelineStatus.IDLE);
+  // Fix: Initialize logs state with an empty array.
   const [logs, setLogs] = useState<AgentLog[]>([]);
   const [activeStage, setActiveStage] = useState<AgentStage | null>(null);
   

@@ -818,12 +818,12 @@ const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnec
                             </p>
                         ) : ( // User is speaking but no transcript yet
                             <span className="text-xs text-indigo-300/70 font-mono animate-pulse">
-                                正在收听...
+                                Listening for input...
                             </span>
                         )
                     ) : ( // Not connecting, not speaking
                         <span className="text-xs text-indigo-300/70 font-mono animate-pulse">
-                            保持按住说话
+                            Hold to Speak
                         </span>
                     )}
                  </div>
@@ -1189,7 +1189,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   const getFrameAsBase64 = (box: SelectionBox | null): string | null => {
     if (!videoRef.current || !canvasRef.current || !containerRef.current) return null;
     const video = videoRef.current;
-    const canvas = canvasRef.current;
+    const canvas = canvasRef.current; // Corrected: access current from ref
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
@@ -1307,16 +1307,9 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   const handleTextQuery = async (queryText: string, points = drawingPoints, bbox = getBoundingBox(drawingPoints)) => {
     if (!queryText.trim() || !videoRef.current) return;
     
-    setIsLoading(true);
-
+    // 1. Prepare Context
     const videoCurrentTime = videoRef.current.currentTime;
     const annotatedImageBase64 = getFrameAsBase64(bbox);
-
-    // --- Stage 3 Clarification: "clip playable" means displaying time range ---
-    // Note: The "clip playable" aspect of Stage 3 currently refers to displaying
-    // the calculated time range. Generating and streaming actual video snippets
-    // is a complex feature requiring dedicated backend processing not currently
-    // implemented in this frontend-only context.
 
     // Helper to get script window based on current time and look-ahead/behind lines
     const getScriptWindow = (lines: SceneData['lines'], time: number, numLinesAround: number): string => {
@@ -1374,10 +1367,27 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       image: annotatedImageBase64 || undefined,
     };
 
+    // 2. Optimistically add User Message (Immediate UI update for screenshot/drawing)
+    const userMsgId = Date.now().toString();
+    const optimisticUserMessage: ChatMessage = {
+        id: userMsgId,
+        role: 'user',
+        content: queryText,
+        timestamp: Date.now(),
+        contextualImage: commonContext.image, // Show image immediately
+        // We'll default to 'S' tier logic for display initially or leave empty, it's fine.
+    };
+
+    setChatHistory(prev => [...prev, optimisticUserMessage]);
+    setInputText(""); // Clear input immediately
+    setDrawingPoints([]); // Clear drawing immediately
+
+    setIsLoading(true);
+
     // Call Stage 5: Context Policy Orchestrator
     const { answer: responseData, finalTier } = await orchestrateQnA(
       queryText,
-      chatHistory, // Pass chat history for conversational context (Stage 6)
+      chatHistory, // Note: This uses the state *before* the optimistic update, which is typical for chat APIs
       commonContext,
       allContextBundles,
       ContextTier.S // Start with S tier
@@ -1385,28 +1395,23 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
 
     setIsLoading(false);
     
-    // Update ChatMessage for display based on the FINAL tier used
-    const finalBundleUsed = allContextBundles[finalTier];
-    const newMessage: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: queryText,
-      timestamp: Date.now(),
-      contextualImage: commonContext.image, // Image is always the same annotated frame
-      contextualClipRange: finalBundleUsed.clipRange,
-      contextualScriptWindow: finalBundleUsed.scriptWindow,
-      contextTierUsed: finalTier
-    };
-    setChatHistory(prev => [...prev, newMessage]);
+    // 3. Add AI Response
+    // We also retroactively update the user message context data if needed, but primarily we just append the answer.
+    setChatHistory(prev => {
+        // Update the previous user message to reflect the *actual* tier used (optional polish)
+        const updatedHistory = prev.map(msg => 
+            msg.id === userMsgId 
+            ? { ...msg, contextTierUsed: finalTier, contextualClipRange: allContextBundles[finalTier].clipRange, contextualScriptWindow: allContextBundles[finalTier].scriptWindow }
+            : msg
+        );
 
-    // Module 7: Answer Packaging - Store structured Data
-    setChatHistory(prev => [...prev, {
-      id: (Date.now() + 1).toString(),
-      role: 'model',
-      content: responseData, 
-      timestamp: Date.now()
-    }]);
-    setInputText(""); // Clear input after processing
+        return [...updatedHistory, {
+            id: (Date.now() + 1).toString(),
+            role: 'model',
+            content: responseData, 
+            timestamp: Date.now()
+        }];
+    });
   };
 
   // Helper to get script window based on current time and look-ahead/behind lines
@@ -1431,6 +1436,22 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     if (liveSessionRef.current) {
       liveSessionRef.current.startInputAudio();
       setIsSpeaking(true);
+      // Immediately add a placeholder message to chat history for streaming input
+      setChatHistory(prev => {
+        // Fix: Use the public getCurrentInputMessageId method.
+        // Only add if there isn't an existing streaming message from the user
+        if (!prev.find(msg => msg.id === liveSessionRef.current?.getCurrentInputMessageId() && msg.role === 'user')) {
+          return [...prev, {
+            // Fix: Use the public getCurrentInputMessageId method.
+            id: liveSessionRef.current?.getCurrentInputMessageId() || Date.now().toString(), // Use the consistent ID
+            role: 'user',
+            content: '', // Start with empty content, will be updated by streaming
+            timestamp: Date.now(),
+            isVoice: true
+          }];
+        }
+        return prev;
+      });
     }
   };
 
@@ -1468,7 +1489,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                    const role = isUser ? 'user' : 'model';
 
                    if (isUser) {
-                     // User's streaming input - always update 'user-live-msg' in chat history
+                     // User's streaming input - update the specific user-live-msg in chat history
                      const userMessageIndex = newHistory.findIndex(msg => msg.id === messageId && msg.role === 'user');
                      if (userMessageIndex !== -1 && typeof newHistory[userMessageIndex].content === 'string') {
                          newHistory[userMessageIndex] = {
@@ -1477,6 +1498,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                              timestamp: Date.now(),
                          };
                      } else if (text) {
+                         // Fallback: If for some reason messageId wasn't found, add new (shouldn't happen with consistent ID)
                          newHistory.push({
                              id: messageId,
                              role: 'user',
@@ -1550,8 +1572,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         };
 
         const dynamicSystemPrompt = `You are a helpful AI tutor watching a video named "${session?.videoName || 'Untitled'}".
-        User is speaking Chinese. Context: Technical discussion about math/coding related to a 3blue1brown-style video.
-        Expect terms like '梯度', '变量', '函数', '微分', '积分', '矩阵', '向量', '算法', '模型', '学习率', '损失函数'.
+        The user is speaking English. Context: Technical discussion about math/coding related to a 3blue1brown-style video.
         
         The current scene's context is: "${currentScene?.visual_context.layout.description || 'No specific scene description available.'}"
         You have additional context about the current video segment:
@@ -1559,7 +1580,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         [Context - Clip Range (Tier ${liveContextBundleL.tier}): ${liveContextBundleL.clipRange.start.toFixed(2)}s to ${liveContextBundleL.clipRange.end.toFixed(2)}s]
         [Context - Relevant Script (Tier ${liveContextBundleL.tier}):\n${liveContextBundleL.scriptWindow}]
         
-        Answer the user's questions about the visual content. Keep your answers concise, conversational, and encouraging.
+        Answer the user's questions about the visual content. Keep your answers concise, conversational, and encouraging. All your responses MUST be in English.
         If the user asks about specific visual elements, describe them based on the images sent to you.
         After you've finished your verbal explanation, call the \`summarizeLiveResponse\` tool to provide a brief summary of your answer, including 2-3 key points. Make sure to include a \`suggested_rewind_time\` if relevant to the current explanation.`;
 
@@ -1785,7 +1806,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
              </div>
 
              <button onClick={toggleDrawingMode} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${mode === 'draw' ? 'bg-brand-600 text-white shadow-lg' : 'bg-white/10 text-slate-300 hover:bg-white/20'}`}>
-                <BoxSelect size={18} /> {mode === 'draw' ? 'Active' : 'Draw'}
+                <BoxSelect size={18} /> {mode === 'draw' ? 'Drawing' : 'Draw'}
              </button>
           </div>
         </div>

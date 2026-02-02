@@ -224,7 +224,7 @@ const executeQnA = async (
       config: {
         systemInstruction: `You are the Q&A Orchestrator Agent (Module 6) for InsightStream.
         
-        Role: Explain educational concepts in videos (3blue1brown style) based on user selection, current video context (timestamp, clip range), and relevant script. You are participating in a multi-turn conversation.
+        Role: Explain educational concepts in videos (3blue1brown style) based on user selection, current video context (timestamp, clip range), and relevant script. You are participating in a multi-turn conversation. All your responses MUST be in English.
 
         Rules:
         1. Analyze the image and the red/blue selection box (if present) for the current turn.
@@ -233,7 +233,7 @@ const executeQnA = async (
         4. Use LaTeX for math.
         5. Populate the JSON response strictly.
         6. Provide a 'confidence' score (0.0 to 1.0) for your answer. Higher for clear, direct answers from context.
-        7. If you can suggest a specific timestamp (in seconds) that the user might want to rewind to for more context on the answer, include it as 'suggested_rewind_time'.
+        7. If you can suggest a specific timestamp (in seconds) that the user might want to revisit for more context on the answer, include it as 'suggested_rewind_time'.
         8. If you feel you need more surrounding video/script context to give a comprehensive answer, set 'needs_more_context' to true and suggest a higher tier (M or L).`,
         responseMimeType: "application/json",
         responseSchema: answerCardSchema
@@ -373,6 +373,7 @@ export class LiveSession {
   private onMessageCallback: LiveMessageCallback; // Use new interface
   private onCloseCallback: () => void;
   private currentModelMessageId: string | null = null; // Track current model's voice message ID for updates
+  private currentInputMessageId: string | null = null; // Changed: Dynamic ID for user's live input, resets on turn complete
   private currentInputTranscription: string = ''; // Accumulate user's input transcript
   private currentOutputTranscription: string = ''; // Accumulate model's output transcript
   private inputAudioEnabled: boolean = false; // New state to control audio sending
@@ -384,6 +385,14 @@ export class LiveSession {
     this.onMessageCallback = onMessage;
     this.onCloseCallback = onClose || (() => {});
     this.ai = new GoogleGenAI({ apiKey: API_KEY || '' });
+  }
+
+  // Helper to safely get or create the input message ID
+  public getCurrentInputMessageId(): string {
+    if (!this.currentInputMessageId) {
+        this.currentInputMessageId = Date.now().toString();
+    }
+    return this.currentInputMessageId;
   }
 
   async connect(systemInstruction: string = "You are a helpful AI tutor.") {
@@ -561,7 +570,12 @@ export class LiveSession {
     if (message.serverContent?.inputTranscription?.text) {
         const text = message.serverContent.inputTranscription.text;
         this.currentInputTranscription += text;
-        this.onMessageCallback({ text, isUser: true, messageId: 'user-live-msg' }); // Use fixed ID for live user input
+        // Check if we have an active input message ID, if not create one
+        if (!this.currentInputMessageId) {
+            this.currentInputMessageId = Date.now().toString();
+        }
+        // Update both the preview (via text) and the chat history (using the consistent messageId)
+        this.onMessageCallback({ text, isUser: true, messageId: this.currentInputMessageId }); 
     }
     
     if (message.serverContent?.outputTranscription?.text) {
@@ -644,13 +658,16 @@ export class LiveSession {
     if (message.serverContent?.turnComplete) {
       if (this.currentInputTranscription) {
         // Finalize user input (it might not have a dedicated 'turnComplete' on its own)
-        this.onMessageCallback({
-          text: this.currentInputTranscription,
-          isUser: true,
-          messageId: 'user-live-msg', // Assuming user input is a single message updated progressively
-          isTurnComplete: true,
-        });
+        if (this.currentInputMessageId) {
+            this.onMessageCallback({
+              text: this.currentInputTranscription,
+              isUser: true,
+              messageId: this.currentInputMessageId, 
+              isTurnComplete: true,
+            });
+        }
         this.currentInputTranscription = '';
+        this.currentInputMessageId = null; // RESET ID to force new bubble next time
       }
 
       // If a model turn completed and no structured summary was sent via toolCall,
@@ -712,6 +729,7 @@ export class LiveSession {
     this.outputAnalyser = null;
     this.inputAnalyser = null;
     this.currentModelMessageId = null;
+    this.currentInputMessageId = null;
     this.currentInputTranscription = '';
     this.currentOutputTranscription = '';
     this.inputAudioEnabled = false; // Reset PTT state
