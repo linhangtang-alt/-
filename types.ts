@@ -33,7 +33,31 @@ export interface SelectionBox {
   x: number;
   y: number;
   width: number;
-  height: number;
+  // Fix: Add 'height' property to SelectionBox interface
+  height: number; 
+}
+
+// Stage 5: Context Tiers
+export enum ContextTier {
+  S = 'S', // Small: current frame + ROI, t +/- 5s clip, current +/- 1 script line
+  M = 'M', // Medium: current frame + ROI, t +/- 10s clip, current +/- 2 script lines
+  L = 'L', // Large: current frame + ROI, t +/- 20s clip, current +/- 3 script lines
+}
+
+// Represents the pre-calculated context bundle for a specific tier
+export interface ContextualBundle {
+  tier: ContextTier;
+  clipRange: { start: number; end: number };
+  scriptWindow: string;
+}
+
+// Context data passed to the AI model
+export interface ContextData {
+  selection?: SelectionBox;
+  timestamp: number;
+  image?: string; // Base64 annotated image (common across tiers for now)
+  currentTier?: ContextTier; // The tier for the current specific API call
+  contextualBundle?: ContextualBundle; // The specific bundle being sent for this call
 }
 
 // Module 7: Answer Packaging Agent Structure
@@ -41,10 +65,22 @@ export interface AnswerCardData {
   title: string;
   answer: string;
   key_terms?: Array<{term: string, definition: string}>;
-  confidence?: number;
+  confidence?: number; // Added for Stage 7
   suggested_followups?: string[];
   is_voice_stream?: boolean; // For Live API fallback
+  // Stage 5: Context Policy feedback
+  needs_more_context?: boolean;
+  suggested_context_tier?: ContextTier;
+  suggested_rewind_time?: number; // Added for Stage 7
 }
+
+// Stage 8: Live Answer Summary for Function Calling
+export interface LiveAnswerCardSummary {
+  title: string;
+  key_points: string[]; // Simpler list of strings for live summary
+  suggested_rewind_time?: number;
+}
+
 
 export interface ChatMessage {
   id: string;
@@ -52,6 +88,10 @@ export interface ChatMessage {
   content: string | AnswerCardData; // Can be string (Voice) or Structured Card (Text)
   timestamp: number;
   isVoice?: boolean;
+  contextualImage?: string; // Base64 image with ROI drawn, for user message display
+  contextualClipRange?: { start: number; end: number }; // Time range for clip, for user message display
+  contextualScriptWindow?: string; // Relevant script lines at query time, for user message display
+  contextTierUsed?: ContextTier; // Stage 5: The final context tier used for this query
 }
 
 export interface VideoMetadata {

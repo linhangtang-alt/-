@@ -2,9 +2,9 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { AppView, ChatMessage, SelectionBox, SavedSession, AnswerCardData, SemanticVideoData, SceneData, SceneAction } from '../types';
-import { ArrowLeft, MessageSquare, Mic, MicOff, Send, X, BoxSelect, Play, Pause, Gauge, Volume2, VolumeX, Eraser, Loader2, AlertCircle, CheckCircle2, Activity, ChevronDown, ChevronRight, HelpCircle, Clock, LayoutTemplate, Zap, Subtitles, ChevronUp, Radio, StopCircle } from 'lucide-react';
-import { generateStructuredResponse, LiveSession, isApiKeyAvailable } from '../services/geminiService';
+import { AppView, ChatMessage, SelectionBox, SavedSession, AnswerCardData, SemanticVideoData, SceneData, SceneAction, ContextTier, ContextualBundle } from '../types';
+import { ArrowLeft, MessageSquare, Mic, MicOff, Send, X, BoxSelect, Play, Pause, Gauge, Volume2, VolumeX, Eraser, Loader2, AlertCircle, CheckCircle2, Activity, ChevronDown, ChevronRight, HelpCircle, Clock, LayoutTemplate, Zap, Subtitles, ChevronUp, Radio, StopCircle, ClipboardEdit } from 'lucide-react';
+import { orchestrateQnA, LiveSession, isApiKeyAvailable } from '../services/geminiService';
 
 // --- MOCK DATA FROM DOCUMENT (FALLBACK) ---
 const MOCK_SCENE_DATA: SemanticVideoData = {
@@ -21,35 +21,184 @@ const MOCK_SCENE_DATA: SemanticVideoData = {
       "visual_context": {
         "layout": {
           "strategy_name": "Data and Metric Split",
-          "description": "A split layout emphasizing the contrast between the visual fit (the line) and the mathematical score (the cost).",
+          "description": "A split layout emphasizing the contrast between the visual fit (the line) and the mathematical score (the cost). The left side is the 'Data Space', the right side is the 'Scoreboard'.",
           "regions": [
-            { "name": "data_space", "bounds": "[0, 0, 0.65, 1]", "purpose": "Displays the coordinate system with data points." },
-            { "name": "metric_space", "bounds": "[0.65, 0, 0.35, 1]", "purpose": "Displays the Cost Function definition." }
+            {
+              "name": "data_space",
+              "bounds": "[0, 0, 0.65, 1]",
+              "purpose": "Displays the coordinate system with data points and the regression line."
+            },
+            {
+              "name": "metric_space",
+              "bounds": "[0.65, 0, 0.35, 1]",
+              "purpose": "Displays the Cost Function definition and the current error value."
+            }
           ]
         },
-        "frame_description": "We start in 'Data Space'. The viewer sees a scatter plot of data points with a regression line passing through them poorly.",
+        "frame_description": "We start in 'Data Space'. The viewer sees a scatter plot of data points with a regression line passing through them poorly. Vertical lines (residuals) connect each point to the regression line, physically representing the error. On the right, the 'Scoreboard' defines the Cost Function (J) as the sum of these squared errors, displaying a large red number indicating a bad fit. The goal is to minimize this number.",
         "components": [
-          { "name": "scatter_points", "type": "ScatterPoints", "region": "data_space", "content_specs": "Randomly distributed data points ($y \\approx 2x + 1$)." },
-          { "name": "bad_fit_line", "type": "LinePlot", "region": "data_space", "content_specs": "A straight line $y = wx$." },
-          { "name": "cost_definition", "type": "MathTex", "region": "metric_space", "content_specs": "$J(w) = \\frac{1}{n} \\sum (y_{pred} - y_{actual})^2$" },
-          { "name": "current_cost_value", "type": "Text", "region": "metric_space", "content_specs": "Cost $J = HIGH$" }
+          {
+            "name": "scatter_points",
+            "type": "ScatterPoints",
+            "region": "data_space",
+            "content_specs": "Randomly distributed data points roughly following a positive linear trend ($y \\approx 2x + 1$). Points are distinct and clearly visible."
+          },
+          {
+            "name": "bad_fit_line",
+            "type": "LinePlot",
+            "region": "data_space",
+            "content_specs": "A straight line $y = wx$ that clearly does not fit the data well (e.g., slope is too steep or too flat). Color: Primary highlight."
+          },
+          {
+            "name": "residual_lines",
+            "type": "Shape",
+            "region": "data_space",
+            "content_specs": "Vertical dashed lines connecting each scatter point to the 'bad_fit_line'. These represent the error terms $(y_i - ^{y}_i)$."
+          },
+          {
+            "name": "cost_definition",
+            "type": "MathTex",
+            "region": "metric_space",
+            "content_specs": "$J(w) = \\frac{1}{n} \\sum (y_{pred} - y_{actual})^2$. Presented as the 'Score' formula."
+          },
+          {
+            "name": "current_cost_value",
+            "type": "Text",
+            "region": "metric_space",
+            "content_specs": "Large, bold text: 'Cost $J = HIGH$'. Color: Red, to indicate a 'bad' state."
+          }
         ]
       },
       "lines": [
-        { "line_id": "S01_L001", "text": "Imagine we have a jumbled set of data points in front of us.", "start_s": 0.0, "end_s": 3.0 },
-        { "line_id": "S01_L002", "text": "Our task is to draw a straight line that passes through them as perfectly as possible; this is **Linear Regression**.", "start_s": 3.0, "end_s": 11.0 },
-        { "line_id": "S01_L003", "text": "If we just draw lines randomly, it's too inefficient.", "start_s": 11.0, "end_s": 15.0 },
-        { "line_id": "S01_L004", "text": "We need a scoreboard to tell us just how bad each line is.", "start_s": 15.0, "end_s": 19.0 },
-        { "line_id": "S01_L005", "text": "By calculating the vertical distance error from all data points to the line, we get a score.", "start_s": 19.0, "end_s": 25.0 },
-        { "line_id": "S01_L006", "text": "This metric, which measures the total error, is the **Cost Function**.", "start_s": 26.0, "end_s": 30.0 },
-        { "line_id": "S01_L007", "text": "Now, our goal is no longer to draw lines, but to minimize this error score.", "start_s": 32.0, "end_s": 36.0 }
+        {
+          "line_id": "S01_L001",
+          "text": "Imagine we have a jumbled set of data points in front of us.",
+          "start_s": 0.0,
+          "end_s": 3.0
+        },
+        {
+          "line_id": "S01_L002",
+          "text": "Our task is to draw a straight line that passes through them as perfectly as possible; this is **Linear Regression**.",
+          "start_s": 3.0,
+          "end_s": 11.0
+        },
+        {
+          "line_id": "S01_L003",
+          "text": "If we just draw lines randomly, it's too inefficient.",
+          "start_s": 11.0,
+          "end_s": 15.0
+        },
+        {
+          "line_id": "S01_L004",
+          "text": "We need a scoreboard to tell us just how bad each line is.",
+          "start_s": 15.0,
+          "end_s": 19.0
+        },
+        {
+          "line_id": "S01_L005",
+          "text": "By calculating the vertical distance error from all data points to the line, we get a score.",
+          "start_s": 19.0,
+          "end_s": 25.0
+        },
+        {
+          "line_id": "S01_L006",
+          "text": "This metric, which measures the total error, is the **Cost Function**.",
+          "start_s": 26.0,
+          "end_s": 30.0
+        },
+        {
+          "line_id": "S01_L007",
+          "text": "Now, our goal is no longer to draw lines, but to minimize this error score.",
+          "start_s": 32.0,
+          "end_s": 36.0
+        }
       ],
       "actions": [
-        { "action_id": "S01_A001", "type": "enter", "targets": ["scatter_points"], "description": "Fade in the scatter plot.", "track": "geom:scatter", "layer": 0, "start_s": 0.0, "duration_s": 2.0 },
-        { "action_id": "S01_A002", "type": "enter", "targets": ["bad_fit_line"], "description": "Draw straight line.", "track": "geom:line", "layer": 1, "start_s": 3.0, "duration_s": 1.0 },
-        { "action_id": "S01_A003", "type": "transform", "targets": ["bad_fit_line"], "description": "Wiggle line randomly.", "track": "geom:line", "layer": 1, "start_s": 11.0, "duration_s": 4.0 },
-        { "action_id": "S01_A004", "type": "enter", "targets": ["cost_definition", "current_cost_value"], "description": "Reveal scoreboard.", "track": "ui:metric", "layer": 2, "start_s": 15.0, "duration_s": 2.0 },
-        { "action_id": "S01_A007", "type": "value_update", "targets": ["current_cost_value"], "description": "Pulse cost value.", "track": "text:score", "layer": 2, "start_s": 34.0, "duration_s": 1.0 }
+        {
+          "action_id": "S01_A001",
+          "type": "enter",
+          "targets": [
+            "scatter_points"
+          ],
+          "description": "Fade in the scatter plot data points to establish the problem space.",
+          "track": "geom:scatter",
+          "layer": 0,
+          "start_s": 0.0,
+          "duration_s": 2.0
+        },
+        {
+          "action_id": "S01_A002",
+          "type": "enter",
+          "targets": [
+            "bad_fit_line"
+          ],
+          "description": "Draw a straight line through the data to represent the initial model.",
+          "track": "geom:line",
+          "layer": 1,
+          "start_s": 3.0,
+          "duration_s": 1.0
+        },
+        {
+          "action_id": "S01_A003",
+          "type": "transform",
+          "targets": [
+            "bad_fit_line"
+          ],
+          "description": "Wiggle or shift the line randomly to illustrate the inefficiency of guessing.",
+          "track": "geom:line",
+          "layer": 1,
+          "start_s": 11.0,
+          "duration_s": 4.0
+        },
+        {
+          "action_id": "S01_A004",
+          "type": "enter",
+          "targets": [
+            "cost_definition",
+            "current_cost_value"
+          ],
+          "description": "Reveal the scoreboard area with the cost function formula and current high error value.",
+          "track": "ui:metric",
+          "layer": 2,
+          "start_s": 15.0,
+          "duration_s": 2.0
+        },
+        {
+          "action_id": "S01_A005",
+          "type": "draw",
+          "targets": [
+            "residual_lines"
+          ],
+          "description": "Draw vertical dashed lines from points to the regression line to visualize error.",
+          "track": "geom:residuals",
+          "layer": 0,
+          "start_s": 19.0,
+          "duration_s": 6.0
+        },
+        {
+          "action_id": "S01_A006",
+          "type": "emphasis",
+          "targets": [
+            "cost_definition"
+          ],
+          "description": "Highlight the cost function formula to associate it with the 'Total Error' concept.",
+          "track": "style:formula",
+          "layer": 2,
+          "start_s": 28.0,
+          "duration_s": 1.0
+        },
+        {
+          "action_id": "S01_A007",
+          "type": "value_update",
+          "targets": [
+            "current_cost_value"
+          ],
+          "description": "Pulse the cost value text to emphasize the goal of minimization.",
+          "track": "text:score",
+          "layer": 2,
+          "start_s": 34.0,
+          "duration_s": 1.0
+        }
       ]
     },
     {
@@ -59,29 +208,178 @@ const MOCK_SCENE_DATA: SemanticVideoData = {
       "visual_context": {
         "layout": {
           "strategy_name": "Dual Space Correspondence",
-          "description": "Split screen to map 'Line Rotation' (Left) directly to 'Curve Traversal' (Right).",
+          "description": "A balanced 50/50 split screen to map 'Line Rotation' directly to 'Curve Traversal'.",
           "regions": [
-            { "name": "left_data_view", "bounds": "[0, 0, 0.5, 1]", "purpose": "Regression line rotating." },
-            { "name": "right_parameter_view", "bounds": "[0.5, 0, 0.5, 1]", "purpose": "Cost Function curve." }
+            {
+              "name": "left_data_view",
+              "bounds": "[0, 0, 0.5, 1]",
+              "purpose": "Shows the regression line rotating."
+            },
+            {
+              "name": "right_parameter_view",
+              "bounds": "[0.5, 0, 0.5, 1]",
+              "purpose": "Shows the Cost Function curve (The Bowl) being traced."
+            }
           ]
         },
-        "frame_description": "On the left, the line exists in (x,y) space; on the right, 'Parameter Space' w vs J.",
+        "frame_description": "The viewer moves their eyes from left to right to understand the mapping. On the left, the line exists in $(x,y)$ space; on the right, we introduce 'Parameter Space' where the axes are Weight ($w$) vs Cost ($J$). A convex parabola (U-shape) is plotted on the right. A specific point on this parabola is highlighted, corresponding exactly to the current slope of the line on the left. This visualizes that 'changing the line' equals 'moving along the curve'.",
         "components": [
-          { "name": "rotating_line", "type": "LinePlot", "region": "left_data_view", "content_specs": "Line rotating." },
-          { "name": "cost_curve", "type": "LinePlot", "region": "right_parameter_view", "content_specs": "U-shaped parabola." },
-          { "name": "state_dot", "type": "ScatterPoints", "region": "right_parameter_view", "content_specs": "Dot on parabola." }
+          {
+            "name": "rotating_line_ghosts",
+            "type": "LinePlot",
+            "region": "left_data_view",
+            "content_specs": "The current regression line (solid) plus 2-3 semi-transparent 'ghost' lines indicating previous positions/rotations."
+          },
+          {
+            "name": "parameter_axes",
+            "type": "Axes2D",
+            "region": "right_parameter_view",
+            "content_specs": "X-axis: Weight ($w$). Y-axis: Cost ($J$). Labeling must be clear to distinguish from the x,y axes on the left."
+          },
+          {
+            "name": "cost_curve_parabola",
+            "type": "LinePlot",
+            "region": "right_parameter_view",
+            "content_specs": "A smooth U-shaped parabola representing the error landscape. The minimum is at the center bottom."
+          },
+          {
+            "name": "current_state_dot",
+            "type": "ScatterPoints",
+            "region": "right_parameter_view",
+            "content_specs": "A single distinct dot placed high on the parabola arm, corresponding to the current 'bad' line on the left."
+          },
+          {
+            "name": "mapping_arrow",
+            "type": "Arrow",
+            "region": "right_parameter_view",
+            "content_specs": "A conceptual connector or annotation linking the slope $w$ on the left to the x-position on the right."
+          }
         ]
       },
       "lines": [
-        { "line_id": "S02_L001", "text": "To find the minimum score, we need to change our perspective.", "start_s": 36.0, "end_s": 40.0 },
-        { "line_id": "S02_L002", "text": "Stop staring at that wobbly line on the left.", "start_s": 40.0, "end_s": 43.0 },
-        { "line_id": "S02_L003", "text": "Look to the right; this shows the slope of the line vs Error.", "start_s": 44.0, "end_s": 50.0 },
-        { "line_id": "S02_L004", "text": "When we rotate the left straight line, the point on the right will draw a curve like a bowl.", "start_s": 51.0, "end_s": 56.0 },
-        { "line_id": "S02_L006", "text": "So, the problem changes from 'drawing a line' to 'finding the bottom of the bowl'.", "start_s": 61.0, "end_s": 65.0 }
+        {
+          "line_id": "S02_L001",
+          "text": "To find the minimum score, we need to change our perspective.",
+          "start_s": 36.0,
+          "end_s": 40.0
+        },
+        {
+          "line_id": "S02_L002",
+          "text": "Stop staring at that wobbly line on the left.",
+          "start_s": 40.0,
+          "end_s": 43.0
+        },
+        {
+          "line_id": "S02_L003",
+          "text": "Look to the right; this shows the slope of the line, which is... **Weights**, the relationship with error.",
+          "start_s": 44.0,
+          "end_s": 50.0
+        },
+        {
+          "line_id": "S02_L004",
+          "text": "When we rotate the left straight line, the point on the right will draw a curve like a bowl.",
+          "start_s": 51.0,
+          "end_s": 56.0
+        },
+        {
+          "line_id": "S02_L005",
+          "text": "The lowest point of this bowl corresponds to that perfect straight line.",
+          "start_s": 56.0,
+          "end_s": 61.0
+        },
+        {
+          "line_id": "S02_L006",
+          "text": "So, the problem changes from 'drawing a line' to 'finding the bottom of the bowl.",
+          "start_s": 61.0,
+          "end_s": 65.0
+        }
       ],
       "actions": [
-         { "action_id": "S02_A004", "type": "transform", "targets": ["rotating_line"], "description": "Rotate line.", "track": "geom:rotation", "layer": 1, "start_s": 51.0, "duration_s": 5.0 },
-         { "action_id": "S02_A005", "type": "draw", "targets": ["cost_curve"], "description": "Trace parabola.", "track": "geom:curve", "layer": 0, "start_s": 51.0, "duration_s": 5.0 }
+        {
+          "action_id": "S02_A001",
+          "type": "enter",
+          "targets": [
+            "rotating_line_ghosts",
+            "parameter_axes"
+          ],
+          "description": "Set up the dual view: Line space on the left, empty parameter axes on the right.",
+          "track": "geom:setup",
+          "layer": 0,
+          "start_s": 36.0,
+          "duration_s": 2.0
+        },
+        {
+          "action_id": "S02_A002",
+          "type": "emphasis",
+          "targets": [
+            "rotating_line_ghosts"
+          ],
+          "description": "Highlight the left side line to address the 'wobbly line' mentioned.",
+          "track": "style:left",
+          "layer": 1,
+          "start_s": 40.0,
+          "duration_s": 1.0
+        },
+        {
+          "action_id": "S02_A003",
+          "type": "enter",
+          "targets": [
+            "current_state_dot"
+          ],
+          "description": "Pop in the single dot on the right side graph to represent the current slope weight.",
+          "track": "geom:dot",
+          "layer": 2,
+          "start_s": 44.0,
+          "duration_s": 1.0
+        },
+        {
+          "action_id": "S02_A004",
+          "type": "transform",
+          "targets": [
+            "rotating_line_ghosts"
+          ],
+          "description": "Rotate the line on the left through various slopes.",
+          "track": "geom:rotation",
+          "layer": 1,
+          "start_s": 51.0,
+          "duration_s": 5.0
+        },
+        {
+          "action_id": "S02_A005",
+          "type": "draw",
+          "targets": [
+            "cost_curve_parabola"
+          ],
+          "description": "Trace the U-shaped parabola on the right simultaneously as the line rotates.",
+          "track": "geom:curve",
+          "layer": 0,
+          "start_s": 51.0,
+          "duration_s": 5.0
+        },
+        {
+          "action_id": "S02_A006",
+          "type": "emphasis",
+          "targets": [
+            "cost_curve_parabola"
+          ],
+          "description": "Highlight the bottom-most point of the bowl to indicate the optimal solution.",
+          "track": "style:curve",
+          "layer": 0,
+          "start_s": 56.0,
+          "duration_s": 1.0
+        },
+        {
+          "action_id": "S02_A007",
+          "type": "move",
+          "targets": [
+            "current_state_dot"
+          ],
+          "description": "Slide the state dot along the curve towards the bottom to visualize the new goal.",
+          "track": "geom:dot",
+          "layer": 2,
+          "start_s": 63.0,
+          "duration_s": 2.0
+        }
       ]
     },
     {
@@ -91,26 +389,167 @@ const MOCK_SCENE_DATA: SemanticVideoData = {
       "visual_context": {
         "layout": {
           "strategy_name": "Landscape Zoom",
-          "description": "Full-screen focus on the Parameter Space (The Bowl).",
-          "regions": [{ "name": "landscape_main", "bounds": "full", "purpose": "The terrain for the 'Hiker' metaphor." }]
+          "description": "Full-screen focus on the Parameter Space (The Bowl) to explain the gradient descent mechanics.",
+          "regions": [
+            {
+              "name": "landscape_main",
+              "bounds": "[0, 0.2, 1, 0.8]",
+              "purpose": "The terrain for the 'Hiker' metaphor."
+            },
+            {
+              "name": "mechanics_legend",
+              "bounds": "[0, 0, 1, 0.2]",
+              "purpose": "Explanatory labels for the visual elements (Slope, Step)."
+            }
+          ]
         },
-        "frame_description": "Zoom in on the U-curve. The 'Hiker' is on a steep slope.",
+        "frame_description": "We zoom in on the U-curve (The Bowl). The 'Hiker' (a ball or dot) is positioned on a steep slope. A tangent line touches the Hiker, representing the Gradient (Slope). An arrow points in the opposite direction of the slope, indicating the 'Descent' step. The visual emphasizes that the steepness determines the urgency of the move, and the step size is controlled by the Learning Rate.",
         "components": [
-          { "name": "zoomed_parabola", "type": "LinePlot", "region": "landscape_main", "content_specs": "Zoomed U-curve." },
-          { "name": "hiker_marker", "type": "Shape", "region": "landscape_main", "content_specs": "Circle at $w_{old}$." },
-          { "name": "tangent_slope", "type": "LinePlot", "region": "landscape_main", "content_specs": "Tangent line $\\frac{\\partial J}{\\partial w}$." },
-          { "name": "descent_vector", "type": "Arrow", "region": "landscape_main", "content_specs": "Arrow pointing downhill." }
+          {
+            "name": "zoomed_parabola",
+            "type": "LinePlot",
+            "region": "landscape_main",
+            "content_specs": "The same Cost Function U-curve, but zoomed in to focus on one side of the valley."
+          },
+          {
+            "name": "hiker_marker",
+            "type": "Shape",
+            "region": "landscape_main",
+            "content_specs": "A circle or icon representing the current parameter value $w_{old}$. Placed on the steep part of the curve."
+          },
+          {
+            "name": "tangent_slope",
+            "type": "LinePlot",
+            "region": "landscape_main",
+            "content_specs": "A straight line tangent to the curve at the 'hiker_marker'. Visualizes $\\frac{\\partial J}{\\partial w}$."
+          },
+          {
+            "name": "descent_vector",
+            "type": "Arrow",
+            "region": "landscape_main",
+            "content_specs": "An arrow starting at the hiker and pointing roughly towards the bottom of the valley (horizontal component). Label: 'Step'."
+          },
+          {
+            "name": "blindness_metaphor",
+            "type": "CalloutBox",
+            "region": "mechanics_legend",
+            "content_specs": "Text: 'The computer is blind. It only feels the slope under its feet.' Positioned to explain why we need the derivative."
+          }
         ]
       },
       "lines": [
-        { "line_id": "S03_L001", "text": "However, the computer is a 'blindfolded hiker'; it cannot see the entire shape of the bowl.", "start_s": 65.0, "end_s": 71.0 },
-        { "line_id": "S03_L003", "text": "The direction and steepness of this slope are mathematically termed **Gradient**.", "start_s": 76.0, "end_s": 80.0 },
-        { "line_id": "S03_L004", "text": "If the slope beneath our feet is uphill, we take a step in the opposite direction.", "start_s": 80.0, "end_s": 85.0 },
-        { "line_id": "S03_L005", "text": "How big this step is is determined by the **Learning Rate**.", "start_s": 86.0, "end_s": 88.0 }
+        {
+          "line_id": "S03_L001",
+          "text": "However, the computer is a 'blindfolded hiker'; it cannot see the entire shape of the bowl.",
+          "start_s": 65.0,
+          "end_s": 71.0
+        },
+        {
+          "line_id": "S03_L002",
+          "text": "It stands halfway up the mountain and can only feel the slope beneath its feet.",
+          "start_s": 71.0,
+          "end_s": 76.0
+        },
+        {
+          "line_id": "S03_L003",
+          "text": "The direction and steepness of this slope are mathematically termed **Gradient**.",
+          "start_s": 76.0,
+          "end_s": 80.0
+        },
+        {
+          "line_id": "S03_L004",
+          "text": "If the slope beneath our feet is uphill, we take a step in the opposite direction.",
+          "start_s": 80.0,
+          "end_s": 85.0
+        },
+        {
+          "line_id": "S03_L005",
+          "text": "How big this step is is determined by the **Learning Rate**.",
+          "start_s": 86.0,
+          "end_s": 88.0
+        },
+        {
+          "line_id": "S03_L006",
+          "text": "Taking too big a step might lead directly to the valley floor; taking too small a step will make the descent as slow as a snail.",
+          "start_s": 89.0,
+          "end_s": 96.0
+        }
       ],
       "actions": [
-         { "action_id": "S03_A002", "type": "enter", "targets": ["tangent_slope"], "description": "Show tangent.", "track": "geom:tangent", "layer": 1, "start_s": 73.5, "duration_s": 1.0 },
-         { "action_id": "S03_A004", "type": "enter", "targets": ["descent_vector"], "description": "Show arrow.", "track": "geom:vector", "layer": 2, "start_s": 82.5, "duration_s": 1.0 }
+        {
+          "action_id": "S03_A001",
+          "type": "enter",
+          "targets": [
+            "zoomed_parabola",
+            "hiker_marker",
+            "blindness_metaphor"
+          ],
+          "description": "Zoom into the curve showing the hiker marker and the 'blindness' label.",
+          "track": "geom:scene_setup",
+          "layer": 0,
+          "start_s": 65.0,
+          "duration_s": 2.0
+        },
+        {
+          "action_id": "S03_A002",
+          "type": "enter",
+          "targets": [
+            "tangent_slope"
+          ],
+          "description": "Draw the tangent line under the hiker to represent the local slope.",
+          "track": "geom:tangent",
+          "layer": 1,
+          "start_s": 73.5,
+          "duration_s": 1.0
+        },
+        {
+          "action_id": "S03_A003",
+          "type": "emphasis",
+          "targets": [
+            "tangent_slope"
+          ],
+          "description": "Flash or thicken the tangent line to emphasize the concept of 'Gradient'.",
+          "track": "style:tangent",
+          "layer": 1,
+          "start_s": 80.0,
+          "duration_s": 1.0
+        },
+        {
+          "action_id": "S03_A004",
+          "type": "enter",
+          "targets": [
+            "descent_vector"
+          ],
+          "description": "Show an arrow pointing opposite to the uphill slope.",
+          "track": "geom:vector",
+          "layer": 2,
+          "start_s": 82.5,
+          "duration_s": 1.0
+        },
+        {
+          "action_id": "S03_A005",
+          "type": "transform",
+          "targets": [
+            "descent_vector"
+          ],
+          "description": "Scale the arrow size up and down to represent the 'Learning Rate' influence.",
+          "track": "geom:vector_scale",
+          "layer": 2,
+          "start_s": 87.0,
+          "duration_s": 1.0
+        },
+        {
+          "action_id": "S03_A006",
+          "type": "move",
+          "targets": [
+            "hiker_marker"
+          ],
+          "description": "Make the hiker jump too far across the valley to visualize 'too big a step'.",
+          "track": "geom:hiker",
+          "layer": 1,
+          "start_s": 89.0,
+          "duration_s": 3.5
+        }
       ]
     },
     {
@@ -120,25 +559,149 @@ const MOCK_SCENE_DATA: SemanticVideoData = {
       "visual_context": {
         "layout": {
           "strategy_name": "Equation Translation",
-          "description": "Top-bottom layout. Formula vs Legend.",
-          "regions": []
+          "description": "Top-bottom layout. Top shows the mathematical update rule. Bottom provides the visual legend decoding the math.",
+          "regions": [
+            {
+              "name": "formula_area",
+              "bounds": "[0, 0.5, 1, 0.5]",
+              "purpose": "Central stage for the Gradient Descent equation."
+            },
+            {
+              "name": "component_map",
+              "bounds": "[0, 0, 1, 0.5]",
+              "purpose": "Breakdown of the equation terms into visual concepts."
+            }
+          ]
         },
-        "frame_description": "The formal equation is presented centrally.",
+        "frame_description": "The formal equation is presented centrally. We break it down to show it is just a translation of the previous scene. Each term in the equation is color-coded to match a specific visual concept: 'New Position' is the result, 'Old Position' is where we started, 'Alpha' is the Step Size, and the 'Gradient' is the Slope. This demystifies the formula.",
         "components": [
-          { "name": "update_rule", "type": "MathTex", "region": "formula_area", "content_specs": "$w_{new} = w_{old} - \\alpha \\frac{\\partial J}{\\partial w}$" },
-          { "name": "alpha_explainer", "type": "Text", "region": "component_map", "content_specs": "$\\alpha$ = Learning Rate" },
-          { "name": "gradient_explainer", "type": "Text", "region": "component_map", "content_specs": "Derivative = Slope" }
+          {
+            "name": "update_rule_equation",
+            "type": "MathTex",
+            "region": "formula_area",
+            "content_specs": "$w_{new} = w_{old} - \\alpha \\frac{\\partial J}{\\partial w}$. Large, centered. Terms are colored differently (e.g., $\\alpha$ in Green, Gradient in Orange)."
+          },
+          {
+            "name": "term_alpha_explainer",
+            "type": "Text",
+            "region": "component_map",
+            "content_specs": "Matches $\\alpha$ color. Text: 'Learning Rate = Stride Length / Speed'."
+          },
+          {
+            "name": "term_gradient_explainer",
+            "type": "Text",
+            "region": "component_map",
+            "content_specs": "Matches Gradient color. Text: 'Derivative = Slope of the Hill (Direction)'."
+          },
+          {
+            "name": "term_subtraction_explainer",
+            "type": "Text",
+            "region": "component_map",
+            "content_specs": "Text: 'Minus sign = Walk AGAINST the slope (Downhill)'."
+          },
+          {
+            "name": "final_convergence_hint",
+            "type": "Shape",
+            "region": "formula_area",
+            "content_specs": "A small visual checkmark or icon appearing near the equation implying 'Solution Found' when slope becomes zero."
+          }
         ]
       },
       "lines": [
-        { "line_id": "S04_L001", "text": "Let's translate this downhill motion into that famous formula.", "start_s": 96.0, "end_s": 100.0 },
-        { "line_id": "S04_L002", "text": "The new position equals the old position, minus the step size multiplied by the slope.", "start_s": 100.0, "end_s": 105.0 },
-        { "line_id": "S04_L003", "text": "That is, the current parameter, minus **Learning Rate** multiplied by **Gradient**.", "start_s": 105.0, "end_s": 110.0 },
-        { "line_id": "S04_L005", "text": "When we finally stop, congratulations, we have found that perfect straight line.", "start_s": 116.0, "end_s": 121.0 }
+        {
+          "line_id": "S04_L001",
+          "text": "Let's translate this downhill motion into that famous formula.",
+          "start_s": 96.0,
+          "end_s": 100.0
+        },
+        {
+          "line_id": "S04_L002",
+          "text": "The new position equals the old position, minus the step size multiplied by the slope.",
+          "start_s": 100.0,
+          "end_s": 105.0
+        },
+        {
+          "line_id": "S04_L003",
+          "text": "That is, the current parameter, minus **Learning Rate** multiplied by **Gradient**.",
+          "start_s": 105.0,
+          "end_s": 110.0
+        },
+        {
+          "line_id": "S04_L004",
+          "text": "As we approach the bottom of the bowl, the slope becomes flatter, and our step size will automatically decrease.",
+          "start_s": 111.0,
+          "end_s": 116.0
+        },
+        {
+          "line_id": "S04_L005",
+          "text": "When we finally stop, congratulations, we have found that perfect straight line.",
+          "start_s": 116.0,
+          "end_s": 121.0
+        }
       ],
       "actions": [
-         { "action_id": "S04_A001", "type": "enter", "targets": ["update_rule"], "description": "Reveal formula.", "track": "ui:formula", "layer": 0, "start_s": 100.0, "duration_s": 2.0 },
-         { "action_id": "S04_A003", "type": "enter", "targets": ["alpha_explainer", "gradient_explainer"], "description": "Show legend.", "track": "ui:legend", "layer": 1, "start_s": 105.0, "duration_s": 2.0 }
+        {
+          "action_id": "S04_A001",
+          "type": "enter",
+          "targets": [
+            "update_rule_equation"
+          ],
+          "description": "Reveal the full gradient descent formula in the center.",
+          "track": "ui:formula",
+          "layer": 0,
+          "start_s": 100.0,
+          "duration_s": 2.0
+        },
+        {
+          "action_id": "S04_A002",
+          "type": "emphasis",
+          "targets": [
+            "update_rule_equation"
+          ],
+          "description": "Highlight the 'New = Old - Step * Slope' structure as it is spoken.",
+          "track": "style:formula",
+          "layer": 0,
+          "start_s": 100.0,
+          "duration_s": 1.0
+        },
+        {
+          "action_id": "S04_A003",
+          "type": "enter",
+          "targets": [
+            "term_alpha_explainer",
+            "term_gradient_explainer",
+            "term_subtraction_explainer"
+          ],
+          "description": "Pop up the legend items explaining Alpha and Gradient below the formula.",
+          "track": "ui:legend",
+          "layer": 1,
+          "start_s": 105.0,
+          "duration_s": 2.0
+        },
+        {
+          "action_id": "S04_A004",
+          "type": "transform",
+          "targets": [
+            "term_alpha_explainer"
+          ],
+          "description": "Visually shrink the 'Step Size' text or icon to show it decreasing as slope flattens.",
+          "track": "geom:legend_size",
+          "layer": 1,
+          "start_s": 113.5,
+          "duration_s": 1.0
+        },
+        {
+          "action_id": "S04_A005",
+          "type": "enter",
+          "targets": [
+            "final_convergence_hint"
+          ],
+          "description": "Show a checkmark or success indicator next to the formula implying convergence.",
+          "track": "ui:hint",
+          "layer": 2,
+          "start_s": 118.5,
+          "duration_s": 1.0
+        }
       ]
     }
   ]
@@ -269,8 +832,22 @@ const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnec
 };
 
 // --- Module 8: Answer UI Agent (Card Component) ---
-const AnswerCard: React.FC<{ data: AnswerCardData; onQuestionClick: (q: string) => void }> = ({ data, onQuestionClick }) => {
+interface AnswerCardProps { 
+    data: AnswerCardData; 
+    onQuestionClick: (q: string) => void; 
+    onRewindClick: (time: number) => void; // Added for Stage 7
+}
+
+const AnswerCard: React.FC<AnswerCardProps> = ({ data, onQuestionClick, onRewindClick }) => {
     const [expandedTerm, setExpandedTerm] = useState<string | null>(null);
+
+    // Determine confidence color
+    const getConfidenceColor = (confidence: number | undefined) => {
+        if (confidence === undefined || confidence === null) return 'text-slate-500 bg-slate-800';
+        if (confidence >= 0.7) return 'text-emerald-300 bg-emerald-900/50';
+        if (confidence >= 0.4) return 'text-amber-300 bg-amber-900/50';
+        return 'text-red-300 bg-red-900/50';
+    };
 
     return (
         <div className="flex flex-col gap-3">
@@ -279,11 +856,18 @@ const AnswerCard: React.FC<{ data: AnswerCardData; onQuestionClick: (q: string) 
                 <h3 className="font-bold text-brand-300 text-sm flex items-center gap-2">
                     <CheckCircle2 size={14} /> {data.title}
                 </h3>
-                {data.is_voice_stream && (
-                    <span className="flex items-center gap-1 text-[10px] font-medium text-brand-400 bg-brand-950/50 px-2 py-0.5 rounded-full border border-brand-500/30">
-                        <Activity size={10} className="animate-pulse" /> Voice
-                    </span>
-                )}
+                <div className="flex items-center gap-2">
+                    {data.is_voice_stream && (
+                        <span className="flex items-center gap-1 text-[10px] font-medium text-brand-400 bg-brand-950/50 px-2 py-0.5 rounded-full border border-brand-500/30">
+                            <Activity size={10} className="animate-pulse" /> Voice
+                        </span>
+                    )}
+                    {data.confidence !== undefined && ( // Stage 7: Confidence display
+                        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${getConfidenceColor(data.confidence)}`}>
+                            Confidence: {Math.round((data.confidence || 0) * 100)}%
+                        </span>
+                    )}
+                </div>
             </div>
 
             {/* Main Answer */}
@@ -314,6 +898,16 @@ const AnswerCard: React.FC<{ data: AnswerCardData; onQuestionClick: (q: string) 
                         ))}
                     </div>
                 </div>
+            )}
+
+            {/* Suggested Rewind Time (Stage 7) */}
+            {data.suggested_rewind_time !== undefined && data.suggested_rewind_time >= 0 && (
+                <button
+                    onClick={() => onRewindClick(data.suggested_rewind_time!)}
+                    className="mt-2 py-2 px-3 bg-indigo-600/20 text-indigo-300 rounded-lg border border-indigo-500/30 text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-indigo-600/30 transition-colors"
+                >
+                    <Clock size={14} /> Rewatch: {formatTime(data.suggested_rewind_time)}
+                </button>
             )}
 
             {/* Suggested Followups */}
@@ -360,11 +954,14 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   const [isMuted, setIsMuted] = useState(false);
   
   // REMOVED micVolume state - handled via polling now for performance
-  const [currentTranscript, setCurrentTranscript] = useState<string | null>(null); // Track immediate transcript
+  const [currentLiveTranscriptPreview, setCurrentLiveTranscriptPreview] = useState<string | null>(null); // Track immediate transcript
   
+  const [fullImageModalOpen, setFullImageModalOpen] = useState(false);
+  const [fullImageSrc, setFullImageSrc] = useState('');
+
   const liveSessionRef = useRef<LiveSession | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
-  const currentVoiceMessageIdRef = useRef<string | null>(null);
+  const currentLiveModelMessageIdRef = useRef<string | null>(null); // Track ID of the active streaming model message
   const dragOffsetRef = useRef<{x: number, y: number}>({ x: 0, y: 0 });
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -377,7 +974,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   // --- Derived Semantic State ---
   const semanticData = session?.semanticData || MOCK_SCENE_DATA;
 
-  const { currentScene, currentLine, activeActions } = useMemo(() => {
+  const { currentScene, currentLine, activeActions, currentSceneScriptLines } = useMemo(() => {
     const scene = semanticData.scenes.find(s => preciseTime >= s.start_time && preciseTime < s.end_time);
     const line = scene?.lines.find(l => preciseTime >= l.start_s && preciseTime < l.end_s);
     
@@ -386,9 +983,25 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         const isActive = preciseTime >= a.start_s && preciseTime < (a.start_s + a.duration_s);
         return isActive;
     }) || [];
-    
-    return { currentScene: scene, currentLine: line, activeActions: actions };
+
+    return { currentScene: scene, currentLine: line, activeActions: actions, currentSceneScriptLines: scene?.lines || [] };
   }, [preciseTime, semanticData]);
+
+  // Stage 4: Script Window logic (derived from currentSceneScriptLines and preciseTime)
+  const scriptWindowText = useMemo(() => {
+    if (!currentScene) return "";
+    const currentLineIndex = currentScene.lines.findIndex(l => preciseTime >= l.start_s && preciseTime < l.end_s);
+    
+    // Default to the first 2 lines if no specific line is active
+    if (currentLineIndex === -1 && currentScene.lines.length > 0) {
+      return currentScene.lines.slice(0, 2).map(l => l.text).join('\n');
+    }
+    
+    // Context Tier S: current +/- 1 line (3 lines total)
+    const startIdxS = Math.max(0, currentLineIndex - 1);
+    const endIdxS = Math.min(currentScene.lines.length, currentLineIndex + 2); // slice end is exclusive
+    return currentScene.lines.slice(startIdxS, endIdxS).map(l => l.text).join('\n');
+  }, [currentScene, preciseTime]);
 
 
   useEffect(() => {
@@ -431,7 +1044,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     if (isLiveActive || !userScrolledUp || chatHistory.length <= 1) {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [chatHistory, isLoading, userScrolledUp, isLiveActive, currentTranscript]);
+  }, [chatHistory, isLoading, userScrolledUp, isLiveActive, currentLiveTranscriptPreview]);
 
   // Stage 0: High-precision time loop
   useEffect(() => {
@@ -482,8 +1095,8 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     // Update state immediately to make UI responsive
     setIsLiveActive(false);
     setIsConnecting(false);
-    setCurrentTranscript(null);
-    currentVoiceMessageIdRef.current = null;
+    setCurrentLiveTranscriptPreview(null);
+    currentLiveModelMessageIdRef.current = null;
 
     if (liveSessionRef.current) {
         try {
@@ -512,6 +1125,18 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       videoRef.current.currentTime = time;
       setCurrentTime(time);
       setPreciseTime(time); // Stage 0: Immediate update on seek
+    }
+  };
+
+  const handleVideoSeek = (time: number) => { // Stage 7: New handler for seeking video
+    if (videoRef.current) {
+      videoRef.current.currentTime = time;
+      setCurrentTime(time);
+      setPreciseTime(time);
+      if (!isPlaying) { // Optionally play if paused and seeking
+          videoRef.current.play().catch(console.warn);
+          setIsPlaying(true);
+      }
     }
   };
 
@@ -547,7 +1172,8 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   };
 
-  const getFrameAsBase64 = (overridePoints?: Point[]): string | null => {
+  // Modified to draw bounding box on canvas
+  const getFrameAsBase64 = (box: SelectionBox | null): string | null => {
     if (!videoRef.current || !canvasRef.current || !containerRef.current) return null;
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -558,7 +1184,20 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     canvas.height = video.videoHeight;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // ... drawing overlay logic for ROI ...
+    if (box) {
+        const scaleX = canvas.width / containerRef.current.clientWidth;
+        const scaleY = canvas.height / containerRef.current.clientHeight;
+
+        ctx.strokeStyle = '#0ea5e9'; // Tailwind brand-500
+        ctx.lineWidth = 4;
+        ctx.setLineDash([10, 5]);
+        ctx.strokeRect(box.x * scaleX, box.y * scaleY, box.width * scaleX, box.height * scaleY);
+        ctx.setLineDash([]); // Reset line dash
+        
+        ctx.fillStyle = 'rgba(14, 165, 233, 0.2)'; // Semi-transparent fill
+        ctx.fillRect(box.x * scaleX, box.y * scaleY, box.width * scaleX, box.height * scaleY);
+    }
+    
     return canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
   }
 
@@ -596,7 +1235,14 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     if (boundingBox && (boundingBox.width > 20 || boundingBox.height > 20)) {
          await handleTextQuery("What is this?", finalPoints, boundingBox);
     }
+    setDrawingPoints([]); // Clear drawing points after sending query
   };
+  
+  const openFullImageModal = (src: string) => {
+    setFullImageSrc(src);
+    setFullImageModalOpen(true);
+  };
+
 
   // --- HUD Dragging Logic ---
   const startHudDrag = (e: React.MouseEvent) => {
@@ -641,38 +1287,86 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
 
   const captureAndSendFrameToLive = () => {
     if (!liveSessionRef.current) return;
-    const base64 = getFrameAsBase64();
+    const base64 = getFrameAsBase64(null); // No bounding box for live streaming
     if (base64) liveSessionRef.current.sendImage(base64);
   };
 
   const handleTextQuery = async (queryText: string, points = drawingPoints, bbox = getBoundingBox(drawingPoints)) => {
-    if (!queryText.trim()) return;
+    if (!queryText.trim() || !videoRef.current) return;
     
-    // Module 5: Context Policy - Capture context
-    const imageBase64 = getFrameAsBase64(points);
-    const newMessage: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: queryText,
-      timestamp: Date.now()
-    };
-    setChatHistory(prev => [...prev, newMessage]);
-    setInputText("");
     setIsLoading(true);
 
-    // Call Module 6: Q&A Orchestrator
-    const responseData = await generateStructuredResponse(
-      newMessage.content as string,
-      chatHistory,
-      {
-        selection: bbox,
-        timestamp: videoRef.current?.currentTime || 0,
-        image: imageBase64 || undefined
+    const videoCurrentTime = videoRef.current.currentTime;
+    const annotatedImageBase64 = getFrameAsBase64(bbox);
+
+    // --- Stage 3 Clarification: "clip playable" means displaying time range ---
+    // Note: The "clip playable" aspect of Stage 3 currently refers to displaying
+    // the calculated time range. Generating and streaming actual video snippets
+    // is a complex feature requiring dedicated backend processing not currently
+    // implemented in this frontend-only context.
+
+    // --- Stage 5: Context Policy - Prepare all Contextual Bundles ---
+    const allContextBundles: Record<ContextTier, ContextualBundle> = {
+      [ContextTier.S]: {
+        tier: ContextTier.S,
+        clipRange: { 
+          start: Math.max(0, videoCurrentTime - 5), // t - 5s
+          end: Math.min(duration, videoCurrentTime + 5) // t + 5s
+        },
+        scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 1) // current +/- 1 line
+      },
+      [ContextTier.M]: {
+        tier: ContextTier.M,
+        clipRange: {
+          start: Math.max(0, videoCurrentTime - 10), // t - 10s
+          end: Math.min(duration, videoCurrentTime + 10) // t + 10s
+        },
+        // Using `currentSceneScriptLines` to ensure the script window is relative to the current scene's full script.
+        scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 2) // current +/- 2 lines
+      },
+      [ContextTier.L]: {
+        tier: ContextTier.L,
+        clipRange: {
+          start: Math.max(0, videoCurrentTime - 20), // t - 20s
+          end: Math.min(duration, videoCurrentTime + 20) // t + 20s
+        },
+        // Using `currentSceneScriptLines` to ensure the script window is relative to the current scene's full script.
+        scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 3) // current +/- 3 lines
       }
+    };
+
+    // Store common context for orchestrator
+    const commonContext = {
+      selection: bbox,
+      timestamp: videoCurrentTime,
+      image: annotatedImageBase64 || undefined,
+    };
+
+    // Call Stage 5: Context Policy Orchestrator
+    const { answer: responseData, finalTier } = await orchestrateQnA(
+      queryText,
+      chatHistory, // Pass chat history for conversational context (Stage 6)
+      commonContext,
+      allContextBundles,
+      ContextTier.S // Start with S tier
     );
 
     setIsLoading(false);
     
+    // Update ChatMessage for display based on the FINAL tier used
+    const finalBundleUsed = allContextBundles[finalTier];
+    const newMessage: ChatMessage = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: queryText,
+      timestamp: Date.now(),
+      contextualImage: commonContext.image, // Image is always the same annotated frame
+      contextualClipRange: finalBundleUsed.clipRange,
+      contextualScriptWindow: finalBundleUsed.scriptWindow,
+      contextTierUsed: finalTier
+    };
+    setChatHistory(prev => [...prev, newMessage]);
+
     // Module 7: Answer Packaging - Store structured Data
     setChatHistory(prev => [...prev, {
       id: (Date.now() + 1).toString(),
@@ -680,7 +1374,26 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       content: responseData, 
       timestamp: Date.now()
     }]);
+    setInputText(""); // Clear input after processing
   };
+
+  // Helper to get script window based on current time and look-ahead/behind lines
+  const getScriptWindow = (lines: SceneData['lines'], time: number, numLinesAround: number): string => {
+    if (!lines || lines.length === 0) return "";
+    
+    const currentLineIndex = lines.findIndex(l => time >= l.start_s && time < l.end_s);
+    
+    if (currentLineIndex === -1) {
+      // If no specific line is active, return a few lines from the beginning of the scene
+      return lines.slice(0, numLinesAround * 2 - 1).map(l => l.text).join('\n');
+    }
+
+    const startIdx = Math.max(0, currentLineIndex - numLinesAround);
+    const endIdx = Math.min(lines.length, currentLineIndex + numLinesAround + 1); // +1 because slice end is exclusive
+    
+    return lines.slice(startIdx, endIdx).map(l => l.text).join('\n');
+  };
+
 
   // --- Live Voice Logic ---
   const toggleLiveMode = async () => {
@@ -693,33 +1406,71 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       setIsConnecting(true);
       try {
         const newLiveSession = new LiveSession(
-            (text, isUser) => {
+            ({ text, structuredData, isUser, messageId, isTurnComplete }) => {
                 // Update short-term transcript preview for visualizer
-                setCurrentTranscript(text);
+                if (text) setCurrentLiveTranscriptPreview(text);
                 
-                // Update chat history directly so user sees the conversation flow
                 setChatHistory(prev => {
                    const lastMsg = prev[prev.length - 1];
                    const role = isUser ? 'user' : 'model';
-                   
-                   // If last message is same role and isVoice, append text (streaming)
-                   if (lastMsg && lastMsg.role === role && lastMsg.isVoice) {
-                       const newHistory = [...prev];
-                       newHistory[newHistory.length - 1] = {
-                           ...lastMsg,
-                           content: (lastMsg.content as string) + text
-                       };
-                       return newHistory;
-                   } else {
-                       // New message
-                       return [...prev, {
-                           id: Date.now().toString(),
-                           role,
-                           content: text,
-                           timestamp: Date.now(),
-                           isVoice: true
-                       }];
+
+                   if (isUser) {
+                     // User messages are simpler: either append to existing or create new
+                     if (lastMsg && lastMsg.role === 'user' && lastMsg.isVoice && lastMsg.id === messageId && typeof lastMsg.content === 'string') {
+                         const newHistory = [...prev];
+                         newHistory[newHistory.length - 1] = {
+                             ...lastMsg,
+                             content: lastMsg.content + (text || ''),
+                             timestamp: Date.now(),
+                         };
+                         return newHistory;
+                     } else if (text) {
+                         return [...prev, {
+                             id: messageId,
+                             role: 'user',
+                             content: text,
+                             timestamp: Date.now(),
+                             isVoice: true
+                         }];
+                     }
+                   } else { // Model messages
+                       if (structuredData) {
+                           // If structured data received, replace the current streaming model message
+                           currentLiveModelMessageIdRef.current = null; // Clear tracking for streaming text
+                           const newHistory = prev.map(msg => 
+                               msg.id === messageId 
+                                   ? { ...msg, content: structuredData, timestamp: Date.now(), isVoice: true } 
+                                   : msg
+                           );
+                           // If no message to replace (e.g., first chunk was structured), add as new
+                           if (!newHistory.some(msg => msg.id === messageId)) {
+                               return [...prev, { id: messageId, role: 'model', content: structuredData, timestamp: Date.now(), isVoice: true }];
+                           }
+                           return newHistory;
+                       } else if (text) {
+                           // If streaming text, update the last model message or create a new one
+                           if (lastMsg && lastMsg.role === 'model' && lastMsg.isVoice && lastMsg.id === messageId && typeof lastMsg.content === 'string') {
+                               const newHistory = [...prev];
+                               newHistory[newHistory.length - 1] = {
+                                   ...lastMsg,
+                                   content: lastMsg.content + text,
+                                   timestamp: Date.now(),
+                               };
+                               return newHistory;
+                           } else {
+                               // Start a new streaming message
+                               currentLiveModelMessageIdRef.current = messageId;
+                               return [...prev, {
+                                   id: messageId,
+                                   role: 'model',
+                                   content: text,
+                                   timestamp: Date.now(),
+                                   isVoice: true
+                               }];
+                           }
+                       }
                    }
+                   return prev; // Fallback if no conditions met (e.g. empty text, unknown messageId)
                 });
             },
             () => { // onClose
@@ -727,11 +1478,14 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
             }
         );
 
-        const systemPrompt = `You are a helpful AI tutor watching a video named "${session?.videoName || 'Untitled'}" with the user.
-        Answer their questions about the visual content. Keep your answers concise, conversational, and encouraging.
-        If the user asks about specific visual elements, describe them based on the images sent to you.`;
+        // Stage 8: Dynamic system instruction for Live Mode and prompt for summary tool
+        const dynamicSystemPrompt = `You are a helpful AI tutor watching a video named "${session?.videoName || 'Untitled'}".
+        The current scene's context is: "${currentScene?.visual_context.layout.description || 'No specific scene description available.'}"
+        Answer the user's questions about the visual content. Keep your answers concise, conversational, and encouraging.
+        If the user asks about specific visual elements, describe them based on the images sent to you.
+        After you've finished your verbal explanation, call the \`summarizeLiveResponse\` tool to provide a brief summary of your answer, including 2-3 key points.`;
 
-        await newLiveSession.connect(systemPrompt);
+        await newLiveSession.connect(dynamicSystemPrompt); // Pass dynamic prompt
         
         liveSessionRef.current = newLiveSession;
         setIsLiveActive(true);
@@ -822,9 +1576,30 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                             <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-700/50 pointer-events-none">
                                 <LayoutTemplate size={14} className="text-purple-400" />
                                 <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Scene {currentScene.scene_id}</span>
+                                {currentScene.start_time !== undefined && currentScene.end_time !== undefined && (
+                                    <span className="text-[10px] font-mono text-slate-500 ml-auto">
+                                        {formatTime(currentScene.start_time)} ~ {formatTime(currentScene.end_time)}
+                                    </span>
+                                )}
                             </div>
                             <h3 className="font-bold text-sm text-white leading-tight mb-1 pointer-events-none">{currentScene.visual_context.layout.strategy_name}</h3>
                             <p className="text-[10px] text-slate-400 leading-relaxed line-clamp-2 pointer-events-none">{currentScene.visual_context.layout.description}</p>
+                        </div>
+                    )}
+
+                    {/* Stage 4: Script Window Panel */}
+                    {scriptWindowText && (
+                        <div 
+                            onMouseDown={startHudDrag}
+                            className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl px-4 py-3 shadow-2xl w-full cursor-move pointer-events-auto"
+                        >
+                            <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-700/50 pointer-events-none">
+                                <ClipboardEdit size={14} className="text-yellow-400" />
+                                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Script Context</span>
+                            </div>
+                            <p className="text-[10px] text-slate-300 leading-relaxed font-mono pointer-events-none whitespace-pre-wrap">
+                                {scriptWindowText}
+                            </p>
                         </div>
                     )}
 
@@ -954,11 +1729,41 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                    {/* Header for Voice/User messages */}
                    {msg.role === 'user' && msg.isVoice && <span className="text-[10px] uppercase font-bold tracking-wider opacity-70 mb-1 flex items-center gap-1"><Activity size={10} className="animate-pulse" /> Live Voice</span>}
                    
+                   {/* Contextual Information for User Messages (Stage 3 & 4) */}
+                   {msg.role === 'user' && (msg.contextualImage || msg.contextualClipRange || msg.contextualScriptWindow) && (
+                        <div className="mb-2 p-2 bg-white/10 rounded-lg border border-white/5 text-slate-300">
+                            <p className="text-[10px] uppercase font-bold text-white/50 mb-1 flex items-center gap-1">
+                                Context Sent {msg.contextTierUsed && <span className="text-[9px] bg-brand-900/50 px-1.5 py-0.5 rounded-full border border-brand-500/30">Tier {msg.contextTierUsed}</span>}
+                            </p>
+                            {msg.contextualImage && (
+                                <div className="mb-1">
+                                    <img 
+                                        src={`data:image/jpeg;base64,${msg.contextualImage}`} 
+                                        alt="Contextual Frame" 
+                                        className="w-full max-h-24 object-contain rounded-md border border-white/10 cursor-pointer" 
+                                        onClick={() => openFullImageModal(`data:image/jpeg;base64,${msg.contextualImage}`)}
+                                    />
+                                    <span className="text-[9px] text-white/70 block mt-1">Click to enlarge annotated frame</span>
+                                </div>
+                            )}
+                            {msg.contextualClipRange && (
+                                <p className="text-[10px] font-mono mb-1">
+                                    Clip: {formatTime(msg.contextualClipRange.start)} ~ {formatTime(msg.contextualClipRange.end)}
+                                </p>
+                            )}
+                            {msg.contextualScriptWindow && (
+                                <div className="text-[10px] font-mono whitespace-pre-wrap max-h-16 overflow-y-auto scrollbar-hide border-t border-white/10 pt-1 mt-1">
+                                    {msg.contextualScriptWindow}
+                                </div>
+                            )}
+                        </div>
+                   )}
+
                    {/* CONTENT RENDERING LOGIC */}
                    {typeof msg.content === 'string' ? (
                        // Standard Text / Voice Stream / Loading
                        <div className="markdown-body">
-                           {(isLiveActive && msg.id === currentVoiceMessageIdRef.current) ? (
+                           {(isLiveActive && msg.role === 'model' && msg.id === currentLiveModelMessageIdRef.current) ? (
                                <div className="whitespace-pre-wrap font-sans">{msg.content}<span className="inline-block w-1.5 h-4 ml-1 bg-current align-middle animate-pulse"></span></div>
                            ) : (
                                <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{msg.content}</ReactMarkdown>
@@ -969,6 +1774,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                        <AnswerCard 
                            data={msg.content as AnswerCardData} 
                            onQuestionClick={(q) => handleTextQuery(q)}
+                           onRewindClick={handleVideoSeek} // Stage 7: Pass the rewind handler
                        />
                    )}
                  </div>
@@ -983,7 +1789,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                  <SidebarVoicePanel 
                     session={liveSessionRef.current} 
                     isConnecting={isConnecting} 
-                    transcript={currentTranscript}
+                    transcript={currentLiveTranscriptPreview}
                     onClose={toggleLiveMode}
                  />
              ) : (
@@ -1002,6 +1808,21 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
            </div>
         </div>
       </div>
+      
+      {/* Full-size Image Modal */}
+      {fullImageModalOpen && (
+        <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4" onClick={() => setFullImageModalOpen(false)}>
+            <div className="relative max-w-4xl max-h-full">
+                <img src={fullImageSrc} alt="Full Size Contextual Frame" className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl border border-white/20"/>
+                <button 
+                    onClick={() => setFullImageModalOpen(false)}
+                    className="absolute -top-4 -right-4 bg-white/20 hover:bg-white/30 text-white p-2 rounded-full backdrop-blur-sm"
+                >
+                    <X size={20}/>
+                </button>
+            </div>
+        </div>
+      )}
     </div>
   );
 };
