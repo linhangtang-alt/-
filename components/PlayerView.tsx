@@ -1169,6 +1169,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
           if (p.x > maxX) maxX = p.x;
           if (p.y > maxY) maxY = p.y;
       });
+      // Ensure height is calculated and returned
       return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   };
 
@@ -1305,6 +1306,24 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     // is a complex feature requiring dedicated backend processing not currently
     // implemented in this frontend-only context.
 
+    // Helper to get script window based on current time and look-ahead/behind lines
+    const getScriptWindow = (lines: SceneData['lines'], time: number, numLinesAround: number): string => {
+      if (!lines || lines.length === 0) return "";
+      
+      const currentLineIndex = lines.findIndex(l => time >= l.start_s && time < l.end_s);
+      
+      if (currentLineIndex === -1) {
+        // If no specific line is active, return a few lines from the beginning of the scene
+        return lines.slice(0, numLinesAround * 2 - 1).map(l => l.text).join('\n');
+      }
+
+      const startIdx = Math.max(0, currentLineIndex - numLinesAround);
+      const endIdx = Math.min(lines.length, currentLineIndex + numLinesAround + 1); // +1 because slice end is exclusive
+      
+      return lines.slice(startIdx, endIdx).map(l => l.text).join('\n');
+    };
+
+
     // --- Stage 5: Context Policy - Prepare all Contextual Bundles ---
     const allContextBundles: Record<ContextTier, ContextualBundle> = {
       [ContextTier.S]: {
@@ -1411,66 +1430,76 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                 if (text) setCurrentLiveTranscriptPreview(text);
                 
                 setChatHistory(prev => {
-                   const lastMsg = prev[prev.length - 1];
+                   const newHistory = [...prev];
                    const role = isUser ? 'user' : 'model';
 
                    if (isUser) {
-                     // User messages are simpler: either append to existing or create new
-                     if (lastMsg && lastMsg.role === 'user' && lastMsg.isVoice && lastMsg.id === messageId && typeof lastMsg.content === 'string') {
-                         const newHistory = [...prev];
-                         newHistory[newHistory.length - 1] = {
-                             ...lastMsg,
-                             content: lastMsg.content + (text || ''),
+                     // User's streaming input
+                     const userMessageIndex = newHistory.findIndex(msg => msg.id === messageId && msg.role === 'user');
+                     if (userMessageIndex !== -1 && typeof newHistory[userMessageIndex].content === 'string') {
+                         newHistory[userMessageIndex] = {
+                             ...newHistory[userMessageIndex],
+                             content: (newHistory[userMessageIndex].content as string) + (text || ''),
                              timestamp: Date.now(),
                          };
-                         return newHistory;
                      } else if (text) {
-                         return [...prev, {
+                         newHistory.push({
                              id: messageId,
                              role: 'user',
                              content: text,
                              timestamp: Date.now(),
                              isVoice: true
-                         }];
+                         });
+                     }
+                     if (isTurnComplete) {
+                         setCurrentLiveTranscriptPreview(null); // Clear user's preview when their turn is complete
                      }
                    } else { // Model messages
+                       const modelMessageIndex = newHistory.findIndex(msg => msg.id === messageId && msg.role === 'model');
+
                        if (structuredData) {
-                           // If structured data received, replace the current streaming model message
-                           currentLiveModelMessageIdRef.current = null; // Clear tracking for streaming text
-                           const newHistory = prev.map(msg => 
-                               msg.id === messageId 
-                                   ? { ...msg, content: structuredData, timestamp: Date.now(), isVoice: true } 
-                                   : msg
-                           );
-                           // If no message to replace (e.g., first chunk was structured), add as new
-                           if (!newHistory.some(msg => msg.id === messageId)) {
-                               return [...prev, { id: messageId, role: 'model', content: structuredData, timestamp: Date.now(), isVoice: true }];
+                           // Received final structured data, replace the streaming text
+                           if (modelMessageIndex !== -1) {
+                               newHistory[modelMessageIndex] = {
+                                   ...newHistory[modelMessageIndex],
+                                   content: structuredData,
+                                   timestamp: Date.now(),
+                                   isVoice: true,
+                               };
+                           } else {
+                               // Fallback: If no streaming text was there to replace, add as new
+                               newHistory.push({ id: messageId, role: 'model', content: structuredData, timestamp: Date.now(), isVoice: true });
                            }
-                           return newHistory;
+                           currentLiveModelMessageIdRef.current = null; // Turn complete for model's structured response
+                           setCurrentLiveTranscriptPreview(null); // Clear model's preview
                        } else if (text) {
-                           // If streaming text, update the last model message or create a new one
-                           if (lastMsg && lastMsg.role === 'model' && lastMsg.isVoice && lastMsg.id === messageId && typeof lastMsg.content === 'string') {
-                               const newHistory = [...prev];
-                               newHistory[newHistory.length - 1] = {
-                                   ...lastMsg,
-                                   content: lastMsg.content + text,
+                           // Streaming text chunk
+                           if (modelMessageIndex !== -1 && typeof newHistory[modelMessageIndex].content === 'string') {
+                               newHistory[modelMessageIndex] = {
+                                   ...newHistory[modelMessageIndex],
+                                   content: (newHistory[modelMessageIndex].content as string) + text,
                                    timestamp: Date.now(),
                                };
-                               return newHistory;
                            } else {
-                               // Start a new streaming message
+                               // First chunk of model's streaming text
                                currentLiveModelMessageIdRef.current = messageId;
-                               return [...prev, {
+                               newHistory.push({
                                    id: messageId,
                                    role: 'model',
                                    content: text,
                                    timestamp: Date.now(),
                                    isVoice: true
-                               }];
+                               });
                            }
                        }
+                       // If turn complete and no structured data was sent (i.e., model just spoke plain text),
+                       // ensure currentLiveModelMessageIdRef is cleared and transcription is finalized if no structuredData came
+                       if (isTurnComplete && !structuredData) { 
+                           currentLiveModelMessageIdRef.current = null;
+                           setCurrentLiveTranscriptPreview(null);
+                       }
                    }
-                   return prev; // Fallback if no conditions met (e.g. empty text, unknown messageId)
+                   return newHistory;
                 });
             },
             () => { // onClose
@@ -1478,14 +1507,31 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
             }
         );
 
-        // Stage 8: Dynamic system instruction for Live Mode and prompt for summary tool
+        // --- Calculate ALL Contextual Bundles for Live System Instruction (Orchestration for Live) ---
+        // This makes the Live session "walk the same context pack" by pre-calculating and embedding
+        // the most comprehensive context (Tier L) into the system instruction.
+        const videoCurrentTime = preciseTime;
+        const liveContextBundleL: ContextualBundle = {
+          tier: ContextTier.L, // Use the highest tier for initial Live context
+          clipRange: {
+            start: Math.max(0, videoCurrentTime - 20), // t - 20s
+            end: Math.min(duration, videoCurrentTime + 20) // t + 20s
+          },
+          scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 3) // current +/- 3 lines
+        };
+
         const dynamicSystemPrompt = `You are a helpful AI tutor watching a video named "${session?.videoName || 'Untitled'}".
         The current scene's context is: "${currentScene?.visual_context.layout.description || 'No specific scene description available.'}"
+        You have additional context about the current video segment:
+        [Context - Current Time: ${videoCurrentTime.toFixed(2)}s]
+        [Context - Clip Range (Tier ${liveContextBundleL.tier}): ${liveContextBundleL.clipRange.start.toFixed(2)}s to ${liveContextBundleL.clipRange.end.toFixed(2)}s]
+        [Context - Relevant Script (Tier ${liveContextBundleL.tier}):\n${liveContextBundleL.scriptWindow}]
+        
         Answer the user's questions about the visual content. Keep your answers concise, conversational, and encouraging.
         If the user asks about specific visual elements, describe them based on the images sent to you.
-        After you've finished your verbal explanation, call the \`summarizeLiveResponse\` tool to provide a brief summary of your answer, including 2-3 key points.`;
+        After you've finished your verbal explanation, call the \`summarizeLiveResponse\` tool to provide a brief summary of your answer, including 2-3 key points. Make sure to include a \`suggested_rewind_time\` if relevant to the current explanation.`;
 
-        await newLiveSession.connect(dynamicSystemPrompt); // Pass dynamic prompt
+        await newLiveSession.connect(dynamicSystemPrompt); // Pass dynamic prompt with rich context
         
         liveSessionRef.current = newLiveSession;
         setIsLiveActive(true);
@@ -1500,7 +1546,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       } catch (err) {
         console.error(err);
         setIsConnecting(false);
-        alert("Failed to connect to Gemini Live. Please try again.");
+        // LiveSession.connect now handles the alert for connection errors
       }
     }
   };

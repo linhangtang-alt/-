@@ -233,7 +233,7 @@ const executeQnA = async (
         4. Use LaTeX for math.
         5. Populate the JSON response strictly.
         6. Provide a 'confidence' score (0.0 to 1.0) for your answer. Higher for clear, direct answers from context.
-        7. If you can suggest a specific timestamp (in seconds) that the user might want to rewind to for more context, include it as 'suggested_rewind_time'.
+        7. If you can suggest a specific timestamp (in seconds) that the user might want to rewind to for more context on the answer, include it as 'suggested_rewind_time'.
         8. If you feel you need more surrounding video/script context to give a comprehensive answer, set 'needs_more_context' to true and suggest a higher tier (M or L).`,
         responseMimeType: "application/json",
         responseSchema: answerCardSchema
@@ -263,10 +263,10 @@ const executeQnA = async (
     console.error("Gemini Q&A Error:", error);
     const errorMsg = error.message || "Unknown error";
     
-    if (errorMsg.includes("xhr error") || errorMsg.includes("code: 6")) {
+    if (errorMsg.includes("xhr error") && errorMsg.includes("code: 6")) {
         return {
-            title: "Network Error",
-            answer: "Unable to connect to Google AI services. This is often caused by AdBlockers or privacy extensions. Please pause them and try again.",
+            title: "Connection Blocked",
+            answer: "Cannot connect to Google AI services. This often indicates an AdBlocker, privacy extension, or firewall is blocking the connection. Please disable them for this site and try again.",
             needs_more_context: false,
             confidence: 0,
         };
@@ -433,6 +433,13 @@ export class LiveSession {
         },
         onerror: (e) => {
              console.error("Live Session Error", e);
+             // Provide specific error message for connection issues
+             const errorMsg = e.error?.message || "Unknown error";
+             if (errorMsg.includes("xhr error") || errorMsg.includes("Rpc failed") || errorMsg.includes("code: 6")) {
+                alert("Failed to connect to Gemini Live. This often indicates an AdBlocker, privacy extension, or firewall is blocking the connection. Please disable them for this site and try again.");
+             } else {
+                alert(`Failed to connect to Gemini Live: ${errorMsg}. Please try again.`);
+             }
              this.cleanup();
              this.onCloseCallback();
         },
@@ -536,6 +543,7 @@ export class LiveSession {
         const s = Math.max(-1, Math.min(1, data[i]));
         int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
+    // Fix: Corrected typo from arrayBufferToBase66 to arrayBufferToBase64
     return arrayBufferToBase64(int16.buffer);
   }
 
