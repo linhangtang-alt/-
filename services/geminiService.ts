@@ -375,6 +375,7 @@ export class LiveSession {
   private currentModelMessageId: string | null = null; // Track current model's voice message ID for updates
   private currentInputTranscription: string = ''; // Accumulate user's input transcript
   private currentOutputTranscription: string = ''; // Accumulate model's output transcript
+  private inputAudioEnabled: boolean = false; // New state to control audio sending
 
   constructor(
       onMessage: LiveMessageCallback, // Use new interface
@@ -424,6 +425,7 @@ export class LiveSession {
         onopen: () => {
           console.log("Live Session Opened");
           this.startAudioStream();
+          this.inputAudioEnabled = false; // Initialize to not send audio until PTT
         },
         onmessage: (message: LiveServerMessage) => this.handleMessage(message),
         onclose: () => {
@@ -475,6 +477,14 @@ export class LiveSession {
     });
   }
 
+  public startInputAudio() {
+    this.inputAudioEnabled = true;
+  }
+
+  public stopInputAudio() {
+    this.inputAudioEnabled = false;
+  }
+
   // Poll for output volume (AI speaking)
   public getOutputVolume(): number {
     return this.getVolumeFromAnalyser(this.outputAnalyser);
@@ -482,7 +492,8 @@ export class LiveSession {
 
   // Poll for input volume (User speaking)
   public getInputVolume(): number {
-    return this.getVolumeFromAnalyser(this.inputAnalyser);
+    // Only return input volume if audio is actively being sent
+    return this.inputAudioEnabled ? this.getVolumeFromAnalyser(this.inputAnalyser) : 0;
   }
 
   private getVolumeFromAnalyser(analyser: AnalyserNode | null): number {
@@ -513,7 +524,7 @@ export class LiveSession {
     this.processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
     
     this.processor.onaudioprocess = (e) => {
-        if (!this.sessionPromise) return;
+        if (!this.sessionPromise || !this.inputAudioEnabled) return; // Only send if enabled
         
         const inputData = e.inputBuffer.getChannelData(0);
         const pcmBase64 = this.createPcmData(inputData);
@@ -543,7 +554,6 @@ export class LiveSession {
         const s = Math.max(-1, Math.min(1, data[i]));
         int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
-    // Fix: Corrected typo from arrayBufferToBase66 to arrayBufferToBase64
     return arrayBufferToBase64(int16.buffer);
   }
 
@@ -704,5 +714,6 @@ export class LiveSession {
     this.currentModelMessageId = null;
     this.currentInputTranscription = '';
     this.currentOutputTranscription = '';
+    this.inputAudioEnabled = false; // Reset PTT state
   }
 }

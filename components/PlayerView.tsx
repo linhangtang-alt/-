@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { AppView, ChatMessage, SelectionBox, SavedSession, AnswerCardData, SemanticVideoData, SceneData, SceneAction, ContextTier, ContextualBundle } from '../types';
-import { ArrowLeft, MessageSquare, Mic, MicOff, Send, X, BoxSelect, Play, Pause, Gauge, Volume2, VolumeX, Eraser, Loader2, AlertCircle, CheckCircle2, Activity, ChevronDown, ChevronRight, HelpCircle, Clock, LayoutTemplate, Zap, Subtitles, ChevronUp, Radio, StopCircle, ClipboardEdit } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Mic, MicOff, Send, X, BoxSelect, Play, Pause, Gauge, Volume2, VolumeX, Eraser, Loader2, AlertCircle, CheckCircle2, Activity, ChevronDown, ChevronRight, HelpCircle, Clock, LayoutTemplate, Zap, Subtitles, ChevronUp, Radio, StopCircle, ClipboardEdit, Hand, HandIcon } from 'lucide-react';
 import { orchestrateQnA, LiveSession, isApiKeyAvailable } from '../services/geminiService';
 
 // --- MOCK DATA FROM DOCUMENT (FALLBACK) ---
@@ -728,11 +728,12 @@ const formatTime = (seconds: number) => {
 interface SidebarVoicePanelProps {
     session: LiveSession | null;
     isConnecting: boolean;
-    transcript: string | null;
+    userTranscriptPreview: string | null; // Renamed for clarity
     onClose: () => void;
+    isSpeaking: boolean; // New prop to indicate if user is actively speaking via PTT
 }
 
-const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnecting, transcript, onClose }) => {
+const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnecting, userTranscriptPreview, onClose, isSpeaking }) => {
     const [aiVol, setAiVol] = useState(0);
 
     // Animation Loop for Smooth Visualizer
@@ -746,14 +747,15 @@ const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnec
                 
                 // Combine them for the visualizer. Max ensures either party speaking animates the orb.
                 // Weight input slightly more for immediate feedback.
-                const combinedVol = Math.max(outputVol, inputVol * 1.5);
+                // Only use inputVol if currently speaking (PTT active)
+                const combinedVol = Math.max(outputVol, isSpeaking ? inputVol * 1.5 : 0); 
                 setAiVol(prev => prev * 0.85 + combinedVol * 0.15);
             }
             rafId = requestAnimationFrame(loop);
         };
         loop();
         return () => cancelAnimationFrame(rafId);
-    }, [session]);
+    }, [session, isSpeaking]); // Re-run effect when isSpeaking changes
 
     return (
         <div className="flex flex-col gap-4 p-6 bg-slate-900/90 rounded-2xl border border-indigo-500/30 shadow-2xl animate-in slide-in-from-bottom-4 relative overflow-hidden group">
@@ -805,16 +807,24 @@ const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnec
                  </div>
 
                  <div className="mt-6 text-center h-12 flex items-center justify-center w-full px-2">
-                    {transcript ? (
-                        <p className="text-sm font-medium text-white/90 leading-tight text-center animate-in fade-in slide-in-from-bottom-2 bg-black/30 backdrop-blur-sm px-3 py-2 rounded-xl border border-white/5 line-clamp-2">
-                             "{transcript}"
-                        </p>
-                    ) : (
-                        !isConnecting && (
+                    {isConnecting ? (
+                        <span className="text-xs text-indigo-300/70 font-mono animate-pulse">
+                            Connecting...
+                        </span>
+                    ) : isSpeaking ? (
+                        userTranscriptPreview ? ( // User is speaking and transcript is available
+                            <p className="text-sm font-medium text-white/90 leading-tight text-center animate-in fade-in slide-in-from-bottom-2 bg-black/30 backdrop-blur-sm px-3 py-2 rounded-xl border border-white/5 line-clamp-2">
+                                 "{userTranscriptPreview}"
+                            </p>
+                        ) : ( // User is speaking but no transcript yet
                             <span className="text-xs text-indigo-300/70 font-mono animate-pulse">
-                                Listening...
+                                正在收听...
                             </span>
                         )
+                    ) : ( // Not connecting, not speaking
+                        <span className="text-xs text-indigo-300/70 font-mono animate-pulse">
+                            保持按住说话
+                        </span>
                     )}
                  </div>
             </div>
@@ -948,13 +958,14 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   
   const [isLiveActive, setIsLiveActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false); // New state for PTT
   const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null);
   
   const [volume, setVolume] = useState(1.0);
   const [isMuted, setIsMuted] = useState(false);
   
   // REMOVED micVolume state - handled via polling now for performance
-  const [currentLiveTranscriptPreview, setCurrentLiveTranscriptPreview] = useState<string | null>(null); // Track immediate transcript
+  const [currentUserLiveTranscriptPreview, setCurrentUserLiveTranscriptPreview] = useState<string | null>(null); // Track immediate user transcript ONLY
   
   const [fullImageModalOpen, setFullImageModalOpen] = useState(false);
   const [fullImageSrc, setFullImageSrc] = useState('');
@@ -1044,7 +1055,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     if (isLiveActive || !userScrolledUp || chatHistory.length <= 1) {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [chatHistory, isLoading, userScrolledUp, isLiveActive, currentLiveTranscriptPreview]);
+  }, [chatHistory, isLoading, userScrolledUp, isLiveActive, currentUserLiveTranscriptPreview]); // Updated dependency
 
   // Stage 0: High-precision time loop
   useEffect(() => {
@@ -1095,7 +1106,8 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     // Update state immediately to make UI responsive
     setIsLiveActive(false);
     setIsConnecting(false);
-    setCurrentLiveTranscriptPreview(null);
+    setIsSpeaking(false); // Reset PTT state
+    setCurrentUserLiveTranscriptPreview(null); // Clear user preview
     currentLiveModelMessageIdRef.current = null;
 
     if (liveSessionRef.current) {
@@ -1332,6 +1344,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
           start: Math.max(0, videoCurrentTime - 5), // t - 5s
           end: Math.min(duration, videoCurrentTime + 5) // t + 5s
         },
+        // Using `currentSceneScriptLines` to ensure the script window is relative to the current scene's full script.
         scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 1) // current +/- 1 line
       },
       [ContextTier.M]: {
@@ -1413,6 +1426,21 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     return lines.slice(startIdx, endIdx).map(l => l.text).join('\n');
   };
 
+  // --- Push-to-Talk Handlers ---
+  const handleStartSpeaking = () => {
+    if (liveSessionRef.current) {
+      liveSessionRef.current.startInputAudio();
+      setIsSpeaking(true);
+    }
+  };
+
+  const handleStopSpeaking = () => {
+    if (liveSessionRef.current) {
+      liveSessionRef.current.stopInputAudio();
+      setIsSpeaking(false);
+    }
+  };
+
 
   // --- Live Voice Logic ---
   const toggleLiveMode = async () => {
@@ -1426,15 +1454,21 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       try {
         const newLiveSession = new LiveSession(
             ({ text, structuredData, isUser, messageId, isTurnComplete }) => {
-                // Update short-term transcript preview for visualizer
-                if (text) setCurrentLiveTranscriptPreview(text);
+                // If it's user's input, update the temporary user transcript preview
+                if (isUser && text) {
+                    setCurrentUserLiveTranscriptPreview(text);
+                }
+                // When user's turn is complete, clear their preview
+                if (isUser && isTurnComplete) {
+                    setCurrentUserLiveTranscriptPreview(null);
+                }
                 
                 setChatHistory(prev => {
                    const newHistory = [...prev];
                    const role = isUser ? 'user' : 'model';
 
                    if (isUser) {
-                     // User's streaming input
+                     // User's streaming input - always update 'user-live-msg' in chat history
                      const userMessageIndex = newHistory.findIndex(msg => msg.id === messageId && msg.role === 'user');
                      if (userMessageIndex !== -1 && typeof newHistory[userMessageIndex].content === 'string') {
                          newHistory[userMessageIndex] = {
@@ -1451,10 +1485,8 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                              isVoice: true
                          });
                      }
-                     if (isTurnComplete) {
-                         setCurrentLiveTranscriptPreview(null); // Clear user's preview when their turn is complete
-                     }
-                   } else { // Model messages
+                     // Preview clearing is handled above
+                   } else { // Model messages - update chat history, NOT user preview
                        const modelMessageIndex = newHistory.findIndex(msg => msg.id === messageId && msg.role === 'model');
 
                        if (structuredData) {
@@ -1471,9 +1503,8 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                                newHistory.push({ id: messageId, role: 'model', content: structuredData, timestamp: Date.now(), isVoice: true });
                            }
                            currentLiveModelMessageIdRef.current = null; // Turn complete for model's structured response
-                           setCurrentLiveTranscriptPreview(null); // Clear model's preview
                        } else if (text) {
-                           // Streaming text chunk
+                           // Streaming text chunk for model
                            if (modelMessageIndex !== -1 && typeof newHistory[modelMessageIndex].content === 'string') {
                                newHistory[modelMessageIndex] = {
                                    ...newHistory[modelMessageIndex],
@@ -1492,11 +1523,9 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                                });
                            }
                        }
-                       // If turn complete and no structured data was sent (i.e., model just spoke plain text),
-                       // ensure currentLiveModelMessageIdRef is cleared and transcription is finalized if no structuredData came
+                       // If turn complete and no structured data was sent, ensure ref is cleared
                        if (isTurnComplete && !structuredData) { 
                            currentLiveModelMessageIdRef.current = null;
-                           setCurrentLiveTranscriptPreview(null);
                        }
                    }
                    return newHistory;
@@ -1521,6 +1550,9 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         };
 
         const dynamicSystemPrompt = `You are a helpful AI tutor watching a video named "${session?.videoName || 'Untitled'}".
+        User is speaking Chinese. Context: Technical discussion about math/coding related to a 3blue1brown-style video.
+        Expect terms like '梯度', '变量', '函数', '微分', '积分', '矩阵', '向量', '算法', '模型', '学习率', '损失函数'.
+        
         The current scene's context is: "${currentScene?.visual_context.layout.description || 'No specific scene description available.'}"
         You have additional context about the current video segment:
         [Context - Current Time: ${videoCurrentTime.toFixed(2)}s]
@@ -1536,10 +1568,11 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         liveSessionRef.current = newLiveSession;
         setIsLiveActive(true);
         setIsConnecting(false);
-        if (videoRef.current) {
-            videoRef.current.pause();
-            setIsPlaying(false);
-        }
+        // Video is no longer paused automatically on entering Live mode
+        // if (videoRef.current) {
+        //     videoRef.current.pause();
+        //     setIsPlaying(false);
+        // }
         
         // Start sending frames periodically
         frameIntervalRef.current = window.setInterval(captureAndSendFrameToLive, 1500);
@@ -1832,17 +1865,34 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
 
            <div className="p-4 border-t border-slate-800 bg-slate-900 shrink-0">
              {isLiveActive || isConnecting ? (
-                 <SidebarVoicePanel 
-                    session={liveSessionRef.current} 
-                    isConnecting={isConnecting} 
-                    transcript={currentLiveTranscriptPreview}
-                    onClose={toggleLiveMode}
-                 />
+                 <>
+                    <SidebarVoicePanel 
+                        session={liveSessionRef.current} 
+                        isConnecting={isConnecting} 
+                        userTranscriptPreview={currentUserLiveTranscriptPreview} // Pass the dedicated user transcript preview
+                        onClose={toggleLiveMode}
+                        isSpeaking={isSpeaking} // Pass PTT state
+                    />
+                    {!isConnecting && ( // Only show PTT button once connected
+                      <button 
+                         onMouseDown={handleStartSpeaking}
+                         onMouseUp={handleStopSpeaking}
+                         onMouseLeave={handleStopSpeaking} // In case mouse leaves button while held
+                         className={`w-full mt-3 py-3 rounded-xl font-bold text-white transition-all shadow-lg flex items-center justify-center gap-2 
+                           ${isSpeaking ? 'bg-red-600 shadow-red-500/30' : 'bg-brand-600 hover:bg-brand-700 shadow-brand-500/20'} 
+                           disabled:opacity-50 disabled:cursor-not-allowed select-none`}
+                         disabled={isConnecting}
+                      >
+                         <HandIcon size={18} className={isSpeaking ? 'animate-bounce' : ''} />
+                         {isSpeaking ? 'Speaking...' : 'Hold to Speak'}
+                      </button>
+                    )}
+                 </>
              ) : (
                  <>
                     <div className="flex items-center gap-2 mb-2">
                         <button onClick={toggleLiveMode} disabled={isConnecting} className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${isLiveActive ? 'bg-red-500/10 text-red-500 border border-red-500/50' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'} disabled:opacity-50 disabled:cursor-not-allowed`}>
-                        {isConnecting ? <><Loader2 size={16} className="animate-spin"/> Connecting...</> : isLiveActive ? "Stop Voice Session" : <><Mic size={16} /> Live Voice Mode</>}
+                        {isConnecting ? <><Loader2 size={16} className="animate-spin"/> Connecting...</> : isLiveActive ? "Stop Voice Session" : <><Mic size={16} /> Start Live Voice</>}
                         </button>
                     </div>
                     <div className="relative">
