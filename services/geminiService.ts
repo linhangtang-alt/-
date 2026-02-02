@@ -460,7 +460,8 @@ export class LiveSession {
         speechConfig: {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
         },
-        systemInstruction: { parts: [{ text: systemInstruction }] },
+        // Change: Pass as direct string, SDK handles content wrapping
+        systemInstruction: systemInstruction,
         inputAudioTranscription: {},
         outputAudioTranscription: {},
         tools: [{ functionDeclarations: [liveAnswerCardSummaryFunctionDeclaration] }] // Integrate function calling

@@ -1375,6 +1375,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         content: queryText,
         timestamp: Date.now(),
         contextualImage: commonContext.image, // Show image immediately
+        videoTimestamp: videoCurrentTime, // Capture video timestamp for text queries too
         // We'll default to 'S' tier logic for display initially or leave empty, it's fine.
     };
 
@@ -1436,6 +1437,9 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     if (liveSessionRef.current) {
       liveSessionRef.current.startInputAudio();
       setIsSpeaking(true);
+      
+      const currentVideoTime = videoRef.current ? videoRef.current.currentTime : 0;
+
       // Immediately add a placeholder message to chat history for streaming input
       setChatHistory(prev => {
         // Fix: Use the public getCurrentInputMessageId method.
@@ -1447,7 +1451,8 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
             role: 'user',
             content: '', // Start with empty content, will be updated by streaming
             timestamp: Date.now(),
-            isVoice: true
+            isVoice: true,
+            videoTimestamp: currentVideoTime // Store video timestamp
           }];
         }
         return prev;
@@ -1827,7 +1832,29 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                  <div className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm transition-all ${msg.role === 'user' ? 'bg-brand-600 text-white rounded-br-none' : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'} ${msg.isVoice ? 'ring-2 ring-brand-400/30' : ''}`}>
                    
                    {/* Header for Voice/User messages */}
-                   {msg.role === 'user' && msg.isVoice && <span className="text-[10px] uppercase font-bold tracking-wider opacity-70 mb-1 flex items-center gap-1"><Activity size={10} className="animate-pulse" /> Live Voice</span>}
+                   {msg.role === 'user' && (
+                        <div className="flex items-center justify-between mb-2 pb-1 border-b border-white/10">
+                            {msg.isVoice ? (
+                                <span className="text-[10px] uppercase font-bold tracking-wider opacity-70 flex items-center gap-1">
+                                    <Activity size={10} className="animate-pulse" /> Live Voice
+                                </span>
+                            ) : (
+                                <span className="text-[10px] uppercase font-bold tracking-wider opacity-70 flex items-center gap-1">
+                                    <MessageSquare size={10} /> Text
+                                </span>
+                            )}
+                            
+                            {msg.videoTimestamp !== undefined && (
+                                <button
+                                    onClick={() => handleVideoSeek(msg.videoTimestamp!)}
+                                    className="text-[10px] font-mono bg-black/20 hover:bg-black/40 px-1.5 py-0.5 rounded text-slate-300 hover:text-white flex items-center gap-1 transition-all"
+                                    title="Jump to video time"
+                                >
+                                    <Clock size={10} /> {formatTime(msg.videoTimestamp)}
+                                </button>
+                            )}
+                        </div>
+                   )}
                    
                    {/* Contextual Information for User Messages (Stage 3 & 4) */}
                    {msg.role === 'user' && (msg.contextualImage || msg.contextualClipRange || msg.contextualScriptWindow) && (

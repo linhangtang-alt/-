@@ -1,3 +1,4 @@
+
 export enum AppView {
   GENERATOR = 'GENERATOR',
   PLAYER = 'PLAYER'
@@ -88,6 +89,7 @@ export interface ChatMessage {
   content: string | AnswerCardData; // Can be string (Voice) or Structured Card (Text)
   timestamp: number;
   isVoice?: boolean;
+  videoTimestamp?: number; // Capture specific video time when message was sent
   contextualImage?: string; // Base64 image with ROI drawn, for user message display
   contextualClipRange?: { start: number; end: number }; // Time range for clip, for user message display
   contextualScriptWindow?: string; // Relevant script lines at query time, for user message display
