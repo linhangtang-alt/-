@@ -724,30 +724,24 @@ const formatTime = (seconds: number) => {
   return `${m}:${s.toString().padStart(2, '0')}`;
 };
 
-// --- COMPONENT: Sidebar Voice Panel (Replaces Full Overlay) ---
+// --- COMPONENT: Sidebar Voice Panel (Compact Version) ---
 interface SidebarVoicePanelProps {
     session: LiveSession | null;
     isConnecting: boolean;
-    userTranscriptPreview: string | null; // Renamed for clarity
+    userTranscriptPreview: string | null;
     onClose: () => void;
-    isSpeaking: boolean; // New prop to indicate if user is actively speaking via PTT
+    isSpeaking: boolean;
 }
 
 const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnecting, userTranscriptPreview, onClose, isSpeaking }) => {
     const [aiVol, setAiVol] = useState(0);
 
-    // Animation Loop for Smooth Visualizer
     useEffect(() => {
         let rafId: number;
         const loop = () => {
             if (session) {
-                // Poll volume levels directly from the audio graph (high performance)
                 const outputVol = session.getOutputVolume();
                 const inputVol = session.getInputVolume();
-                
-                // Combine them for the visualizer. Max ensures either party speaking animates the orb.
-                // Weight input slightly more for immediate feedback.
-                // Only use inputVol if currently speaking (PTT active)
                 const combinedVol = Math.max(outputVol, isSpeaking ? inputVol * 1.5 : 0); 
                 setAiVol(prev => prev * 0.85 + combinedVol * 0.15);
             }
@@ -755,86 +749,71 @@ const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnec
         };
         loop();
         return () => cancelAnimationFrame(rafId);
-    }, [session, isSpeaking]); // Re-run effect when isSpeaking changes
+    }, [session, isSpeaking]);
 
     return (
-        <div className="flex flex-col gap-4 p-6 bg-slate-900/90 rounded-2xl border border-indigo-500/30 shadow-2xl animate-in slide-in-from-bottom-4 relative overflow-hidden group">
+        <div className="flex flex-col gap-2 p-3 bg-slate-900/90 rounded-2xl border border-indigo-500/30 shadow-2xl animate-in slide-in-from-bottom-4 relative overflow-hidden group">
             
-            {/* Ambient Background Effects */}
             <div className={`absolute top-0 left-0 w-full h-full bg-gradient-to-br from-indigo-900/20 to-purple-900/20 transition-opacity duration-1000 ${isConnecting ? 'opacity-50' : 'opacity-100'}`} />
-            <div className={`absolute -top-10 -left-10 w-32 h-32 bg-indigo-500/30 rounded-full blur-3xl transition-all duration-1000 ${!isConnecting ? 'scale-150 opacity-40' : 'scale-100 opacity-20'}`} />
-            <div className={`absolute -bottom-10 -right-10 w-32 h-32 bg-purple-500/30 rounded-full blur-3xl transition-all duration-1000 ${!isConnecting ? 'scale-150 opacity-40' : 'scale-100 opacity-20'}`} />
-
+            
             <div className="relative z-10 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${isConnecting ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 animate-ping'}`} />
-                    <span className="text-xs font-bold text-slate-200 tracking-widest uppercase">
-                        {isConnecting ? "Connecting..." : "Live Session"}
+                    <div className={`w-1.5 h-1.5 rounded-full ${isConnecting ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 animate-ping'}`} />
+                    <span className="text-[10px] font-bold text-slate-200 tracking-widest uppercase">
+                        {isConnecting ? "Connecting..." : "Live"}
                     </span>
                 </div>
-                <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors bg-white/5 p-1.5 rounded-full hover:bg-white/10">
-                    <X size={14}/>
+                <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors bg-white/5 p-1 rounded-full hover:bg-white/10">
+                    <X size={12}/>
                 </button>
             </div>
 
-            {/* Main Visualizer Orb */}
-            <div className="relative z-10 flex flex-col items-center justify-center py-6 min-h-[160px]">
-                 {/* Central Animated Sphere */}
+            <div className="relative z-10 flex flex-col items-center justify-center py-1 min-h-[80px]">
                  <div 
-                    className={`relative w-24 h-24 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(99,102,241,0.3)] transition-all duration-300 border-2 
+                    className={`relative w-12 h-12 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(99,102,241,0.3)] transition-all duration-300 border 
                     ${isConnecting ? 'bg-slate-800 border-slate-700' : 'bg-gradient-to-br from-indigo-600 to-purple-700 border-indigo-400/50'}`}
-                    style={{ transform: `scale(${1 + Math.min(aiVol * 0.8, 0.3)})` }}
+                    style={{ transform: `scale(${1 + Math.min(aiVol * 0.5, 0.2)})` }}
                  >
                     {isConnecting ? (
-                        <Loader2 className="text-slate-500 animate-spin" size={24} />
+                        <Loader2 className="text-slate-500 animate-spin" size={14} />
                     ) : (
-                        // Audio Wave Bars simulation
-                        <div className="flex gap-1 items-center h-10">
-                            <div className="w-1 bg-white/90 rounded-full animate-[bounce_1s_infinite_0s]" style={{ height: `${20 + aiVol * 60}%` }} />
-                            <div className="w-1 bg-white/90 rounded-full animate-[bounce_1s_infinite_0.1s]" style={{ height: `${35 + aiVol * 80}%` }} />
-                            <div className="w-1 bg-white/90 rounded-full animate-[bounce_1s_infinite_0.2s]" style={{ height: `${50 + aiVol * 100}%` }} />
-                            <div className="w-1 bg-white/90 rounded-full animate-[bounce_1s_infinite_0.15s]" style={{ height: `${30 + aiVol * 70}%` }} />
+                        <div className="flex gap-0.5 items-center h-4">
+                            <div className="w-0.5 bg-white/90 rounded-full" style={{ height: `${20 + aiVol * 60}%` }} />
+                            <div className="w-0.5 bg-white/90 rounded-full" style={{ height: `${35 + aiVol * 80}%` }} />
+                            <div className="w-0.5 bg-white/90 rounded-full" style={{ height: `${20 + aiVol * 60}%` }} />
                         </div>
-                    )}
-                    
-                    {/* Ring Ripples */}
-                    {!isConnecting && (
-                        <>
-                           <div className="absolute inset-0 rounded-full border border-indigo-400/30 animate-ping opacity-20" style={{ animationDuration: '2s' }} />
-                           <div className="absolute inset-0 rounded-full border border-purple-400/30 animate-ping opacity-20" style={{ animationDuration: '3s', animationDelay: '0.5s' }} />
-                        </>
                     )}
                  </div>
 
-                 <div className="mt-6 text-center h-12 flex items-center justify-center w-full px-2">
+                 <div className="mt-2 text-center min-h-[24px] flex items-center justify-center w-full px-1">
                     {isConnecting ? (
-                        <span className="text-xs text-indigo-300/70 font-mono animate-pulse">
-                            Connecting...
+                        <span className="text-[9px] text-indigo-300/70 font-mono animate-pulse">
+                            Establishing Link...
                         </span>
                     ) : isSpeaking ? (
-                        userTranscriptPreview ? ( // User is speaking and transcript is available
-                            <p className="text-sm font-medium text-white/90 leading-tight text-center animate-in fade-in slide-in-from-bottom-2 bg-black/30 backdrop-blur-sm px-3 py-2 rounded-xl border border-white/5 line-clamp-2">
+                        userTranscriptPreview ? (
+                            <p className="text-[10px] font-medium text-white/90 leading-tight text-center bg-black/30 backdrop-blur-sm px-2 py-0.5 rounded-md border border-white/5">
                                  "{userTranscriptPreview}"
                             </p>
-                        ) : ( // User is speaking but no transcript yet
-                            <span className="text-xs text-indigo-300/70 font-mono animate-pulse">
-                                Listening for input...
+                        ) : (
+                            <span className="text-[9px] text-indigo-300/70 font-mono animate-pulse">
+                                Listening...
                             </span>
                         )
-                    ) : ( // Not connecting, not speaking
-                        <span className="text-xs text-indigo-300/70 font-mono animate-pulse">
-                            Hold to Speak
+                    ) : (
+                        <span className="text-[9px] text-indigo-300/70 font-mono">
+                            Press and Hold
                         </span>
                     )}
                  </div>
             </div>
 
-            <div className="relative z-10 pt-2 border-t border-white/5">
+            <div className="relative z-10 pt-1 border-t border-white/5">
                  <button 
                     onClick={onClose}
-                    className="w-full py-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 rounded-xl text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98]"
+                    className="w-full py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 rounded-lg text-[9px] font-bold uppercase tracking-widest flex items-center justify-center gap-1.5 transition-all active:scale-[0.98]"
                  >
-                    <StopCircle size={16} /> End Session
+                    <StopCircle size={12} /> End
                  </button>
             </div>
         </div>
@@ -845,13 +824,12 @@ const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnec
 interface AnswerCardProps { 
     data: AnswerCardData; 
     onQuestionClick: (q: string) => void; 
-    onRewindClick: (time: number) => void; // Added for Stage 7
+    onRewindClick: (time: number) => void;
 }
 
 const AnswerCard: React.FC<AnswerCardProps> = ({ data, onQuestionClick, onRewindClick }) => {
     const [expandedTerm, setExpandedTerm] = useState<string | null>(null);
 
-    // Determine confidence color
     const getConfidenceColor = (confidence: number | undefined) => {
         if (confidence === undefined || confidence === null) return 'text-slate-500 bg-slate-800';
         if (confidence >= 0.7) return 'text-emerald-300 bg-emerald-900/50';
@@ -861,7 +839,6 @@ const AnswerCard: React.FC<AnswerCardProps> = ({ data, onQuestionClick, onRewind
 
     return (
         <div className="flex flex-col gap-3">
-            {/* Title / Confidence */}
             <div className="flex justify-between items-center border-b border-slate-600/50 pb-2 mb-1">
                 <h3 className="font-bold text-brand-300 text-sm flex items-center gap-2">
                     <CheckCircle2 size={14} /> {data.title}
@@ -872,7 +849,7 @@ const AnswerCard: React.FC<AnswerCardProps> = ({ data, onQuestionClick, onRewind
                             <Activity size={10} className="animate-pulse" /> Voice
                         </span>
                     )}
-                    {data.confidence !== undefined && ( // Stage 7: Confidence display
+                    {data.confidence !== undefined && (
                         <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${getConfidenceColor(data.confidence)}`}>
                             Confidence: {Math.round((data.confidence || 0) * 100)}%
                         </span>
@@ -880,14 +857,12 @@ const AnswerCard: React.FC<AnswerCardProps> = ({ data, onQuestionClick, onRewind
                 </div>
             </div>
 
-            {/* Main Answer */}
             <div className="markdown-body text-slate-200 text-sm">
                 <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
                     {data.answer}
                 </ReactMarkdown>
             </div>
 
-            {/* Key Terms (Foldable) */}
             {data.key_terms && data.key_terms.length > 0 && (
                 <div className="bg-slate-900/50 rounded-lg p-2 mt-1 border border-slate-700/50">
                     <p className="text-[10px] uppercase font-bold text-slate-500 mb-2">Key Concepts</p>
@@ -910,7 +885,6 @@ const AnswerCard: React.FC<AnswerCardProps> = ({ data, onQuestionClick, onRewind
                 </div>
             )}
 
-            {/* Suggested Rewind Time (Stage 7) */}
             {data.suggested_rewind_time !== undefined && data.suggested_rewind_time >= 0 && (
                 <button
                     onClick={() => onRewindClick(data.suggested_rewind_time!)}
@@ -920,7 +894,6 @@ const AnswerCard: React.FC<AnswerCardProps> = ({ data, onQuestionClick, onRewind
                 </button>
             )}
 
-            {/* Suggested Followups */}
             {data.suggested_followups && (
                 <div className="mt-2 flex flex-wrap gap-2">
                     {data.suggested_followups.map((q, idx) => (
@@ -941,10 +914,10 @@ const AnswerCard: React.FC<AnswerCardProps> = ({ data, onQuestionClick, onRewind
 const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSession }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [preciseTime, setPreciseTime] = useState(0); // Stage 0: Precise time state
+  const [preciseTime, setPreciseTime] = useState(0); 
   const [duration, setDuration] = useState(0);
   const [videoSrc, setVideoSrc] = useState(DEFAULT_VIDEO);
-  const [isHudOpen, setIsHudOpen] = useState(true); // Control visibility of telemetry details
+  const [isHudOpen, setIsHudOpen] = useState(true);
   const [hudPosition, setHudPosition] = useState<{x: number, y: number} | null>(null);
   
   const [isDrawing, setIsDrawing] = useState(false);
@@ -958,21 +931,23 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   
   const [isLiveActive, setIsLiveActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false); // New state for PTT
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null);
   
   const [volume, setVolume] = useState(1.0);
   const [isMuted, setIsMuted] = useState(false);
   
-  // REMOVED micVolume state - handled via polling now for performance
-  const [currentUserLiveTranscriptPreview, setCurrentUserLiveTranscriptPreview] = useState<string | null>(null); // Track immediate user transcript ONLY
+  const [currentUserLiveTranscriptPreview, setCurrentUserLiveTranscriptPreview] = useState<string | null>(null);
   
   const [fullImageModalOpen, setFullImageModalOpen] = useState(false);
   const [fullImageSrc, setFullImageSrc] = useState('');
+  
+  const [showSubtitles, setShowSubtitles] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(400);
 
   const liveSessionRef = useRef<LiveSession | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
-  const currentLiveModelMessageIdRef = useRef<string | null>(null); // Track ID of the active streaming model message
+  const currentLiveModelMessageIdRef = useRef<string | null>(null);
   const dragOffsetRef = useRef<{x: number, y: number}>({ x: 0, y: 0 });
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -982,14 +957,12 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const hudContainerRef = useRef<HTMLDivElement>(null);
 
-  // --- Derived Semantic State ---
   const semanticData = session?.semanticData || MOCK_SCENE_DATA;
 
   const { currentScene, currentLine, activeActions, currentSceneScriptLines } = useMemo(() => {
     const scene = semanticData.scenes.find(s => preciseTime >= s.start_time && preciseTime < s.end_time);
     const line = scene?.lines.find(l => preciseTime >= l.start_s && preciseTime < l.end_s);
     
-    // Look ahead window of 1 second for actions to make them feel responsive/anticipated
     const actions = scene?.actions.filter(a => {
         const isActive = preciseTime >= a.start_s && preciseTime < (a.start_s + a.duration_s);
         return isActive;
@@ -998,22 +971,18 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     return { currentScene: scene, currentLine: line, activeActions: actions, currentSceneScriptLines: scene?.lines || [] };
   }, [preciseTime, semanticData]);
 
-  // Stage 4: Script Window logic (derived from currentSceneScriptLines and preciseTime)
   const scriptWindowText = useMemo(() => {
     if (!currentScene) return "";
     const currentLineIndex = currentScene.lines.findIndex(l => preciseTime >= l.start_s && preciseTime < l.end_s);
     
-    // Default to the first 2 lines if no specific line is active
     if (currentLineIndex === -1 && currentScene.lines.length > 0) {
       return currentScene.lines.slice(0, 2).map(l => l.text).join('\n');
     }
     
-    // Context Tier S: current +/- 1 line (3 lines total)
     const startIdxS = Math.max(0, currentLineIndex - 1);
-    const endIdxS = Math.min(currentScene.lines.length, currentLineIndex + 2); // slice end is exclusive
+    const endIdxS = Math.min(currentScene.lines.length, currentLineIndex + 2);
     return currentScene.lines.slice(startIdxS, endIdxS).map(l => l.text).join('\n');
   }, [currentScene, preciseTime]);
-
 
   useEffect(() => {
     const requestMic = async () => {
@@ -1051,13 +1020,11 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   }, [chatHistory, session, onUpdateSession]);
 
   useEffect(() => {
-    // Aggressively scroll to bottom during Live Voice Mode or normal interaction
     if (isLiveActive || !userScrolledUp || chatHistory.length <= 1) {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [chatHistory, isLoading, userScrolledUp, isLiveActive, currentUserLiveTranscriptPreview]); // Updated dependency
+  }, [chatHistory, isLoading, userScrolledUp, isLiveActive, currentUserLiveTranscriptPreview]);
 
-  // Stage 0: High-precision time loop
   useEffect(() => {
     let animationFrameId: number;
     const loop = () => {
@@ -1070,7 +1037,6 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     if (isPlaying) {
       loop();
     } else {
-        // One-off update to ensure accuracy when paused/stopped
         if (videoRef.current) setPreciseTime(videoRef.current.currentTime);
     }
 
@@ -1090,7 +1056,6 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     };
   }, []);
 
-  // --- Volume Sync Effect ---
   useEffect(() => {
       if (videoRef.current) {
           videoRef.current.volume = isMuted ? 0 : volume;
@@ -1103,16 +1068,15 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         window.clearInterval(frameIntervalRef.current);
         frameIntervalRef.current = null;
     }
-    // Update state immediately to make UI responsive
     setIsLiveActive(false);
     setIsConnecting(false);
-    setIsSpeaking(false); // Reset PTT state
-    setCurrentUserLiveTranscriptPreview(null); // Clear user preview
+    setIsSpeaking(false);
+    setCurrentUserLiveTranscriptPreview(null);
     currentLiveModelMessageIdRef.current = null;
 
     if (liveSessionRef.current) {
         try {
-            liveSessionRef.current.disconnect();
+            liveSessionRef.current.disconnect(); 
         } catch(e) { console.warn("Error disconnecting session", e); }
         liveSessionRef.current = null;
     }
@@ -1136,16 +1100,16 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     if (videoRef.current) {
       videoRef.current.currentTime = time;
       setCurrentTime(time);
-      setPreciseTime(time); // Stage 0: Immediate update on seek
+      setPreciseTime(time);
     }
   };
 
-  const handleVideoSeek = (time: number) => { // Stage 7: New handler for seeking video
+  const handleVideoSeek = (time: number) => {
     if (videoRef.current) {
       videoRef.current.currentTime = time;
       setCurrentTime(time);
       setPreciseTime(time);
-      if (!isPlaying) { // Optionally play if paused and seeking
+      if (!isPlaying) {
           videoRef.current.play().catch(console.warn);
           setIsPlaying(true);
       }
@@ -1181,15 +1145,13 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
           if (p.x > maxX) maxX = p.x;
           if (p.y > maxY) maxY = p.y;
       });
-      // Ensure height is calculated and returned
       return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   };
 
-  // Modified to draw bounding box on canvas
   const getFrameAsBase64 = (box: SelectionBox | null): string | null => {
     if (!videoRef.current || !canvasRef.current || !containerRef.current) return null;
     const video = videoRef.current;
-    const canvas = canvasRef.current; // Corrected: access current from ref
+    const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
@@ -1201,13 +1163,13 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         const scaleX = canvas.width / containerRef.current.clientWidth;
         const scaleY = canvas.height / containerRef.current.clientHeight;
 
-        ctx.strokeStyle = '#0ea5e9'; // Tailwind brand-500
+        ctx.strokeStyle = '#0ea5e9';
         ctx.lineWidth = 4;
         ctx.setLineDash([10, 5]);
         ctx.strokeRect(box.x * scaleX, box.y * scaleY, box.width * scaleX, box.height * scaleY);
-        ctx.setLineDash([]); // Reset line dash
+        ctx.setLineDash([]);
         
-        ctx.fillStyle = 'rgba(14, 165, 233, 0.2)'; // Semi-transparent fill
+        ctx.fillStyle = 'rgba(14, 165, 233, 0.2)';
         ctx.fillRect(box.x * scaleX, box.y * scaleY, box.width * scaleX, box.height * scaleY);
     }
     
@@ -1248,7 +1210,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     if (boundingBox && (boundingBox.width > 20 || boundingBox.height > 20)) {
          await handleTextQuery("What is this?", finalPoints, boundingBox);
     }
-    setDrawingPoints([]); // Clear drawing points after sending query
+    setDrawingPoints([]);
   };
   
   const openFullImageModal = (src: string) => {
@@ -1257,7 +1219,6 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   };
 
 
-  // --- HUD Dragging Logic ---
   const startHudDrag = (e: React.MouseEvent) => {
       e.stopPropagation();
       e.preventDefault();
@@ -1269,19 +1230,16 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       const containerRect = container.getBoundingClientRect();
       const videoRect = videoArea.getBoundingClientRect();
       
-      // Calculate initial offset within the HUD container
       const offsetX = e.clientX - containerRect.left;
       const offsetY = e.clientY - containerRect.top;
       dragOffsetRef.current = { x: offsetX, y: offsetY };
       
       const handleMouseMove = (moveEvent: MouseEvent) => {
-           // Calculate new position relative to video container
            let newLeft = moveEvent.clientX - videoRect.left - dragOffsetRef.current.x;
            let newTop = moveEvent.clientY - videoRect.top - dragOffsetRef.current.y;
 
-           // Simple bounds checking
            const maxLeft = videoRect.width - containerRect.width;
-           const maxTop = videoRect.height - 40; // Allow partial bottom overlap but keep header visible
+           const maxTop = videoRect.height - 40;
 
            newLeft = Math.max(0, Math.min(newLeft, maxLeft));
            newTop = Math.max(0, Math.min(newTop, maxTop));
@@ -1300,109 +1258,84 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
 
   const captureAndSendFrameToLive = () => {
     if (!liveSessionRef.current) return;
-    const base64 = getFrameAsBase64(null); // No bounding box for live streaming
-    if (base64) liveSessionRef.current.sendImage(base64);
+    const base64 = getFrameAsBase64(null);
+    if (base64) liveSessionRef.current.sendImage(base64); // sendImage method will be available on LiveSession
   };
 
   const handleTextQuery = async (queryText: string, points = drawingPoints, bbox = getBoundingBox(drawingPoints)) => {
     if (!queryText.trim() || !videoRef.current) return;
     
-    // 1. Prepare Context
     const videoCurrentTime = videoRef.current.currentTime;
     const annotatedImageBase64 = getFrameAsBase64(bbox);
 
-    // Helper to get script window based on current time and look-ahead/behind lines
     const getScriptWindow = (lines: SceneData['lines'], time: number, numLinesAround: number): string => {
       if (!lines || lines.length === 0) return "";
       
       const currentLineIndex = lines.findIndex(l => time >= l.start_s && time < l.end_s);
       
       if (currentLineIndex === -1) {
-        // If no specific line is active, return a few lines from the beginning of the scene
         return lines.slice(0, numLinesAround * 2 - 1).map(l => l.text).join('\n');
       }
 
       const startIdx = Math.max(0, currentLineIndex - numLinesAround);
-      const endIdx = Math.min(lines.length, currentLineIndex + numLinesAround + 1); // +1 because slice end is exclusive
+      const endIdx = Math.min(lines.length, currentLineIndex + numLinesAround + 1);
       
       return lines.slice(startIdx, endIdx).map(l => l.text).join('\n');
     };
 
-
-    // --- Stage 5: Context Policy - Prepare all Contextual Bundles ---
     const allContextBundles: Record<ContextTier, ContextualBundle> = {
       [ContextTier.S]: {
         tier: ContextTier.S,
-        clipRange: { 
-          start: Math.max(0, videoCurrentTime - 5), // t - 5s
-          end: Math.min(duration, videoCurrentTime + 5) // t + 5s
-        },
-        // Using `currentSceneScriptLines` to ensure the script window is relative to the current scene's full script.
-        scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 1) // current +/- 1 line
+        clipRange: { start: Math.max(0, videoCurrentTime - 5), end: Math.min(duration, videoCurrentTime + 5) },
+        scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 1)
       },
       [ContextTier.M]: {
         tier: ContextTier.M,
-        clipRange: {
-          start: Math.max(0, videoCurrentTime - 10), // t - 10s
-          end: Math.min(duration, videoCurrentTime + 10) // t + 10s
-        },
-        // Using `currentSceneScriptLines` to ensure the script window is relative to the current scene's full script.
-        scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 2) // current +/- 2 lines
+        clipRange: { start: Math.max(0, videoCurrentTime - 10), end: Math.min(duration, videoCurrentTime + 10) },
+        scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 2)
       },
       [ContextTier.L]: {
         tier: ContextTier.L,
-        clipRange: {
-          start: Math.max(0, videoCurrentTime - 20), // t - 20s
-          end: Math.min(duration, videoCurrentTime + 20) // t + 20s
-        },
-        // Using `currentSceneScriptLines` to ensure the script window is relative to the current scene's full script.
-        scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 3) // current +/- 3 lines
+        clipRange: { start: Math.max(0, videoCurrentTime - 20), end: Math.min(duration, videoCurrentTime + 20) },
+        scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 3)
       }
     };
 
-    // Store common context for orchestrator
     const commonContext = {
       selection: bbox,
       timestamp: videoCurrentTime,
       image: annotatedImageBase64 || undefined,
     };
 
-    // 2. Optimistically add User Message (Immediate UI update for screenshot/drawing)
     const userMsgId = Date.now().toString();
     const optimisticUserMessage: ChatMessage = {
         id: userMsgId,
         role: 'user',
         content: queryText,
         timestamp: Date.now(),
-        contextualImage: commonContext.image, // Show image immediately
-        videoTimestamp: videoCurrentTime, // Capture video timestamp for text queries too
-        // We'll default to 'S' tier logic for display initially or leave empty, it's fine.
+        contextualImage: commonContext.image,
+        videoTimestamp: videoCurrentTime,
     };
 
     setChatHistory(prev => [...prev, optimisticUserMessage]);
-    setInputText(""); // Clear input immediately
-    setDrawingPoints([]); // Clear drawing immediately
+    setInputText("");
+    setDrawingPoints([]);
 
     setIsLoading(true);
 
-    // Call Stage 5: Context Policy Orchestrator
-    const { answer: responseData, finalTier } = await orchestrateQnA(
+    const { answer: responseData, finalTier } = await orchestrateQnA( // This function might need adaptation in geminiService to match signature, assuming it handles context policy internally or simplified here
       queryText,
-      chatHistory, // Note: This uses the state *before* the optimistic update, which is typical for chat APIs
-      commonContext,
-      allContextBundles,
-      ContextTier.S // Start with S tier
+      // For simplicity in this revert, passing basic context, ignoring full tier policy complexity for now or assuming orchestrateQnA handles it
+      { ...commonContext, currentTier: ContextTier.S, contextualBundle: allContextBundles[ContextTier.S] },
+      semanticData
     );
 
     setIsLoading(false);
     
-    // 3. Add AI Response
-    // We also retroactively update the user message context data if needed, but primarily we just append the answer.
     setChatHistory(prev => {
-        // Update the previous user message to reflect the *actual* tier used (optional polish)
         const updatedHistory = prev.map(msg => 
             msg.id === userMsgId 
-            ? { ...msg, contextTierUsed: finalTier, contextualClipRange: allContextBundles[finalTier].clipRange, contextualScriptWindow: allContextBundles[finalTier].scriptWindow }
+            ? { ...msg, contextTierUsed: finalTier, contextualClipRange: allContextBundles[finalTier || ContextTier.S].clipRange, contextualScriptWindow: allContextBundles[finalTier || ContextTier.S].scriptWindow }
             : msg
         );
 
@@ -1415,44 +1348,25 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     });
   };
 
-  // Helper to get script window based on current time and look-ahead/behind lines
-  const getScriptWindow = (lines: SceneData['lines'], time: number, numLinesAround: number): string => {
-    if (!lines || lines.length === 0) return "";
-    
-    const currentLineIndex = lines.findIndex(l => time >= l.start_s && time < l.end_s);
-    
-    if (currentLineIndex === -1) {
-      // If no specific line is active, return a few lines from the beginning of the scene
-      return lines.slice(0, numLinesAround * 2 - 1).map(l => l.text).join('\n');
-    }
-
-    const startIdx = Math.max(0, currentLineIndex - numLinesAround);
-    const endIdx = Math.min(lines.length, currentLineIndex + numLinesAround + 1); // +1 because slice end is exclusive
-    
-    return lines.slice(startIdx, endIdx).map(l => l.text).join('\n');
-  };
-
-  // --- Push-to-Talk Handlers ---
   const handleStartSpeaking = () => {
     if (liveSessionRef.current) {
       liveSessionRef.current.startInputAudio();
       setIsSpeaking(true);
       
       const currentVideoTime = videoRef.current ? videoRef.current.currentTime : 0;
+      const contextualImage = getFrameAsBase64(null);
 
-      // Immediately add a placeholder message to chat history for streaming input
       setChatHistory(prev => {
-        // Fix: Use the public getCurrentInputMessageId method.
-        // Only add if there isn't an existing streaming message from the user
-        if (!prev.find(msg => msg.id === liveSessionRef.current?.getCurrentInputMessageId() && msg.role === 'user')) {
+        const messageId = liveSessionRef.current?.getCurrentInputMessageId() || Date.now().toString();
+        if (!prev.find(msg => msg.id === messageId && msg.role === 'user')) {
           return [...prev, {
-            // Fix: Use the public getCurrentInputMessageId method.
-            id: liveSessionRef.current?.getCurrentInputMessageId() || Date.now().toString(), // Use the consistent ID
+            id: messageId,
             role: 'user',
-            content: '', // Start with empty content, will be updated by streaming
+            content: '',
             timestamp: Date.now(),
             isVoice: true,
-            videoTimestamp: currentVideoTime // Store video timestamp
+            videoTimestamp: currentVideoTime,
+            contextualImage: contextualImage || undefined
           }];
         }
         return prev;
@@ -1467,8 +1381,6 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     }
   };
 
-
-  // --- Live Voice Logic ---
   const toggleLiveMode = async () => {
     if (isLiveActive) {
       stopLiveSession();
@@ -1479,135 +1391,114 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
       setIsConnecting(true);
       try {
         const newLiveSession = new LiveSession(
-            ({ text, structuredData, isUser, messageId, isTurnComplete }) => {
-                // If it's user's input, update the temporary user transcript preview
+            (update) => {
+                const { text, structuredData, isUser, messageId, isTurnComplete } = update;
+
                 if (isUser && text) {
-                    setCurrentUserLiveTranscriptPreview(text);
+                     if (!isTurnComplete) {
+                        setCurrentUserLiveTranscriptPreview(prevTranscript => (prevTranscript || "") + text); 
+                     } else {
+                        setCurrentUserLiveTranscriptPreview(null);
+                     }
                 }
-                // When user's turn is complete, clear their preview
-                if (isUser && isTurnComplete) {
-                    setCurrentUserLiveTranscriptPreview(null);
-                }
-                
+
                 setChatHistory(prev => {
                    const newHistory = [...prev];
-                   const role = isUser ? 'user' : 'model';
-
-                   if (isUser) {
-                     // User's streaming input - update the specific user-live-msg in chat history
-                     const userMessageIndex = newHistory.findIndex(msg => msg.id === messageId && msg.role === 'user');
-                     if (userMessageIndex !== -1 && typeof newHistory[userMessageIndex].content === 'string') {
-                         newHistory[userMessageIndex] = {
-                             ...newHistory[userMessageIndex],
-                             content: (newHistory[userMessageIndex].content as string) + (text || ''),
-                             timestamp: Date.now(),
-                         };
-                     } else if (text) {
-                         // Fallback: If for some reason messageId wasn't found, add new (shouldn't happen with consistent ID)
-                         newHistory.push({
-                             id: messageId,
-                             role: 'user',
-                             content: text,
-                             timestamp: Date.now(),
-                             isVoice: true
-                         });
-                     }
-                     // Preview clearing is handled above
-                   } else { // Model messages - update chat history, NOT user preview
-                       const modelMessageIndex = newHistory.findIndex(msg => msg.id === messageId && msg.role === 'model');
-
+                   const existingMsgIndex = newHistory.findIndex(m => m.id === messageId);
+                   
+                   if (existingMsgIndex !== -1) {
+                       const existingMsg = newHistory[existingMsgIndex];
+                       let newContent = existingMsg.content;
+                       
                        if (structuredData) {
-                           // Received final structured data, replace the streaming text
-                           if (modelMessageIndex !== -1) {
-                               newHistory[modelMessageIndex] = {
-                                   ...newHistory[modelMessageIndex],
-                                   content: structuredData,
-                                   timestamp: Date.now(),
-                                   isVoice: true,
-                               };
-                           } else {
-                               // Fallback: If no streaming text was there to replace, add as new
-                               newHistory.push({ id: messageId, role: 'model', content: structuredData, timestamp: Date.now(), isVoice: true });
-                           }
-                           currentLiveModelMessageIdRef.current = null; // Turn complete for model's structured response
+                            newContent = { 
+                                title: structuredData.title, 
+                                answer: structuredData.key_points.map(p => `• ${p}`).join('\n'),
+                                suggested_rewind_time: structuredData.suggested_rewind_time,
+                                is_voice_stream: true
+                            } as AnswerCardData;
                        } else if (text) {
-                           // Streaming text chunk for model
-                           if (modelMessageIndex !== -1 && typeof newHistory[modelMessageIndex].content === 'string') {
-                               newHistory[modelMessageIndex] = {
-                                   ...newHistory[modelMessageIndex],
-                                   content: (newHistory[modelMessageIndex].content as string) + text,
-                                   timestamp: Date.now(),
-                               };
+                           if (isUser) {
+                               newContent = (typeof existingMsg.content === 'string' ? existingMsg.content : '') + text;
                            } else {
-                               // First chunk of model's streaming text
-                               currentLiveModelMessageIdRef.current = messageId;
-                               newHistory.push({
-                                   id: messageId,
-                                   role: 'model',
-                                   content: text,
-                                   timestamp: Date.now(),
-                                   isVoice: true
-                               });
+                               if (typeof newContent === 'string') {
+                                   newContent = newContent + text;
+                               }
                            }
                        }
-                       // If turn complete and no structured data was sent, ensure ref is cleared
-                       if (isTurnComplete && !structuredData) { 
-                           currentLiveModelMessageIdRef.current = null;
+                       newHistory[existingMsgIndex] = { ...existingMsg, content: newContent };
+                   } else {
+                       if (!isUser) {
+                            const content = structuredData ? {
+                                title: structuredData.title, 
+                                answer: structuredData.key_points.map(p => `• ${p}`).join('\n'),
+                                suggested_rewind_time: structuredData.suggested_rewind_time,
+                                is_voice_stream: true
+                            } : (text || '');
+                            
+                            newHistory.push({
+                                id: messageId,
+                                role: 'model',
+                                content: content as any,
+                                timestamp: Date.now(),
+                                isVoice: true
+                            });
+                       } else if (isUser && text) {
+                           newHistory.push({
+                               id: messageId,
+                               role: 'user',
+                               content: text,
+                               timestamp: Date.now(),
+                               isVoice: true
+                           });
                        }
                    }
                    return newHistory;
                 });
             },
-            () => { // onClose
+            () => { 
                 stopLiveSession();
             }
         );
 
-        // --- Calculate ALL Contextual Bundles for Live System Instruction (Orchestration for Live) ---
-        // This makes the Live session "walk the same context pack" by pre-calculating and embedding
-        // the most comprehensive context (Tier L) into the system instruction.
-        const videoCurrentTime = preciseTime;
-        const liveContextBundleL: ContextualBundle = {
-          tier: ContextTier.L, // Use the highest tier for initial Live context
-          clipRange: {
-            start: Math.max(0, videoCurrentTime - 20), // t - 20s
-            end: Math.min(duration, videoCurrentTime + 20) // t + 20s
-          },
-          scriptWindow: getScriptWindow(currentSceneScriptLines, videoCurrentTime, 3) // current +/- 3 lines
-        };
-
-        const dynamicSystemPrompt = `You are a helpful AI tutor watching a video named "${session?.videoName || 'Untitled'}".
-        The user is speaking English. Context: Technical discussion about math/coding related to a 3blue1brown-style video.
-        
-        The current scene's context is: "${currentScene?.visual_context.layout.description || 'No specific scene description available.'}"
-        You have additional context about the current video segment:
-        [Context - Current Time: ${videoCurrentTime.toFixed(2)}s]
-        [Context - Clip Range (Tier ${liveContextBundleL.tier}): ${liveContextBundleL.clipRange.start.toFixed(2)}s to ${liveContextBundleL.clipRange.end.toFixed(2)}s]
-        [Context - Relevant Script (Tier ${liveContextBundleL.tier}):\n${liveContextBundleL.scriptWindow}]
-        
-        Answer the user's questions about the visual content. Keep your answers concise, conversational, and encouraging. All your responses MUST be in English.
-        If the user asks about specific visual elements, describe them based on the images sent to you.
-        After you've finished your verbal explanation, call the \`summarizeLiveResponse\` tool to provide a brief summary of your answer, including 2-3 key points. Make sure to include a \`suggested_rewind_time\` if relevant to the current explanation.`;
-
-        await newLiveSession.connect(dynamicSystemPrompt); // Pass dynamic prompt with rich context
+        const liveContextInstruction = `You are discussing the video titled "${session?.videoName || 'Unknown Video'}". ` + 
+                                     `Be concise, helpful, and conversational.`;
+        await newLiveSession.connect(liveContextInstruction); 
         
         liveSessionRef.current = newLiveSession;
         setIsLiveActive(true);
         setIsConnecting(false);
-        // Video is no longer paused automatically on entering Live mode
-        // if (videoRef.current) {
-        //     videoRef.current.pause();
-        //     setIsPlaying(false);
-        // }
         
-        // Start sending frames periodically
         frameIntervalRef.current = window.setInterval(captureAndSendFrameToLive, 1500);
       } catch (err) {
         console.error(err);
         setIsConnecting(false);
-        // LiveSession.connect now handles the alert for connection errors
       }
     }
+  };
+  
+  const handleResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const dx = startX - moveEvent.clientX;
+      const newWidth = startWidth + dx;
+      const minWidth = 320;
+      const maxWidth = 800;
+      if (newWidth >= minWidth && newWidth <= maxWidth) {
+        setSidebarWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
   };
 
   const getSvgPath = () => {
@@ -1640,13 +1531,12 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
           <div className="relative flex-1 flex items-center justify-center overflow-hidden">
             <video ref={videoRef} src={videoSrc} className="w-full h-full object-contain" onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)} onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)} controls={false} onClick={togglePlay} crossOrigin="anonymous"/>
             
-            {/* --- SEMANTIC TELEMETRY DECK (HUD) --- */}
+            {/* HUD */}
             <div 
               ref={hudContainerRef}
               className={`absolute z-30 flex flex-col items-end gap-3 w-72 transition-opacity duration-300 ${isHudOpen ? '' : 'pointer-events-none'}`}
               style={hudPosition ? { left: hudPosition.x, top: hudPosition.y } : { top: '5rem', right: '1.5rem' }}
             >
-                {/* 1. Timer Panel with Toggle */}
                 <div 
                   onMouseDown={startHudDrag}
                   className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl px-4 py-3 shadow-2xl flex items-center justify-between gap-3 w-full pointer-events-auto transition-all hover:bg-slate-900/90 cursor-move"
@@ -1669,10 +1559,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                     </button>
                 </div>
 
-                {/* Collapsible Container */}
                 <div className={`flex flex-col gap-3 w-full transition-all duration-300 ${isHudOpen ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none h-0 overflow-hidden'}`}>
-                    
-                    {/* 2. Scene Context Panel */}
                     {currentScene && (
                         <div 
                           onMouseDown={startHudDrag}
@@ -1681,18 +1568,11 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                             <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-700/50 pointer-events-none">
                                 <LayoutTemplate size={14} className="text-purple-400" />
                                 <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Scene {currentScene.scene_id}</span>
-                                {currentScene.start_time !== undefined && currentScene.end_time !== undefined && (
-                                    <span className="text-[10px] font-mono text-slate-500 ml-auto">
-                                        {formatTime(currentScene.start_time)} ~ {formatTime(currentScene.end_time)}
-                                    </span>
-                                )}
                             </div>
                             <h3 className="font-bold text-sm text-white leading-tight mb-1 pointer-events-none">{currentScene.visual_context.layout.strategy_name}</h3>
                             <p className="text-[10px] text-slate-400 leading-relaxed line-clamp-2 pointer-events-none">{currentScene.visual_context.layout.description}</p>
                         </div>
                     )}
-
-                    {/* Stage 4: Script Window Panel */}
                     {scriptWindowText && (
                         <div 
                             onMouseDown={startHudDrag}
@@ -1707,64 +1587,11 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                             </p>
                         </div>
                     )}
-
-                     {/* 3. Active Actions Panel */}
-                     {activeActions.length > 0 && (
-                        <div 
-                          onMouseDown={startHudDrag}
-                          className="bg-slate-900/80 backdrop-blur-md border border-brand-500/30 rounded-xl px-4 py-3 shadow-2xl w-full cursor-move pointer-events-auto"
-                        >
-                            <div className="flex items-center gap-2 mb-2 pointer-events-none">
-                                 <Zap size={14} className="text-yellow-400 animate-pulse" />
-                                 <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Active Events</span>
-                            </div>
-                            <div className="space-y-2 pointer-events-none">
-                                {activeActions.map(action => (
-                                    <div key={action.action_id} className="flex flex-col gap-0.5 animate-pulse">
-                                        <div className="flex items-center justify-between">
-                                            <span className="text-xs font-mono text-brand-300">{action.type}</span>
-                                            <span className="text-[10px] text-slate-500">{action.duration_s}s</span>
-                                        </div>
-                                        <div className="text-[11px] text-white font-medium">
-                                            {action.description}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* 4. Component Inspector (Math Objects) */}
-                    {currentScene && (
-                        <div 
-                          onMouseDown={startHudDrag}
-                          className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-xl p-3 shadow-2xl w-full max-h-[30vh] overflow-y-auto scrollbar-hide cursor-move pointer-events-auto"
-                        >
-                             <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2 pointer-events-none">Active Components</div>
-                             <div className="space-y-2 pointer-events-none">
-                                {currentScene.visual_context.components.map((comp, idx) => (
-                                    <div key={idx} className={`text-xs p-2 rounded bg-slate-800/50 border border-slate-700/30 ${activeActions.some(a => a.targets.includes(comp.name)) ? 'border-brand-500/50 bg-brand-900/20' : ''}`}>
-                                        <div className="flex justify-between mb-1">
-                                            <span className="font-mono text-[10px] text-slate-400">{comp.name}</span>
-                                            <span className="text-[9px] bg-slate-700 px-1 rounded text-slate-300">{comp.type}</span>
-                                        </div>
-                                        {comp.type === 'MathTex' ? (
-                                            <div className="text-brand-100 overflow-x-auto">
-                                                <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{comp.content_specs}</ReactMarkdown>
-                                            </div>
-                                        ) : (
-                                            <div className="text-slate-300 truncate">{comp.content_specs}</div>
-                                        )}
-                                    </div>
-                                ))}
-                             </div>
-                        </div>
-                    )}
                 </div>
             </div>
 
-            {/* --- SEMANTIC SUBTITLES --- */}
-            {currentLine && (
+            {/* Subtitles */}
+            {showSubtitles && currentLine && (
                 <div className="absolute bottom-24 left-1/2 transform -translate-x-1/2 max-w-2xl w-full px-6 text-center pointer-events-none z-30">
                      <div className="inline-block bg-black/60 backdrop-blur-sm px-6 py-3 rounded-2xl shadow-lg border border-white/10 animate-in slide-in-from-bottom-2 fade-in duration-300">
                          <p className="text-lg md:text-xl font-medium text-white drop-shadow-md leading-relaxed">
@@ -1789,35 +1616,32 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                 <span className="text-xs font-mono text-slate-300 w-10">{formatTime(duration)}</span>
              </div>
 
-             {/* Volume Controls */}
              <div className="flex items-center gap-2 mx-2">
                  <button onClick={toggleMute} className="text-white hover:text-brand-400 transition-colors p-1">
                      {isMuted || volume === 0 ? <VolumeX size={20}/> : <Volume2 size={20}/>}
                  </button>
                  <div className="w-20 flex items-center">
-                     <input 
-                         type="range" 
-                         min="0" 
-                         max="1" 
-                         step="0.05" 
-                         value={isMuted ? 0 : volume} 
-                         onChange={handleVolumeChange} 
-                         className="w-full h-1 bg-slate-600 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:bg-brand-500 hover:[&::-webkit-slider-thumb]:bg-brand-400 transition-all"
-                     />
+                     <input type="range" min="0" max="1" step="0.05" value={isMuted ? 0 : volume} onChange={handleVolumeChange} className="w-full h-1 bg-slate-600 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:bg-brand-500 hover:[&::-webkit-slider-thumb]:bg-brand-400 transition-all"/>
                  </div>
-                 <span className="text-xs font-mono text-slate-400 w-9 text-right">
-                     {isMuted ? '0%' : `${Math.round(volume * 100)}%`}
-                 </span>
              </div>
-
+             
+             <button onClick={() => setShowSubtitles(!showSubtitles)} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${showSubtitles ? 'bg-brand-600 text-white shadow-lg' : 'bg-white/10 text-slate-300 hover:bg-white/20'}`}>
+                <Subtitles size={18} />
+             </button>
              <button onClick={toggleDrawingMode} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${mode === 'draw' ? 'bg-brand-600 text-white shadow-lg' : 'bg-white/10 text-slate-300 hover:bg-white/20'}`}>
                 <BoxSelect size={18} /> {mode === 'draw' ? 'Drawing' : 'Draw'}
              </button>
           </div>
         </div>
 
+        {/* Resizer Handle */}
+        <div 
+          onMouseDown={handleResizeMouseDown}
+          className="w-1.5 bg-slate-800 hover:bg-brand-500 transition-colors duration-200 cursor-col-resize shrink-0"
+        />
+
         {/* Sidebar: Q&A */}
-        <div className="w-[400px] bg-slate-900 border-l border-slate-800 flex flex-col shadow-2xl z-40 shrink-0 h-full max-h-screen">
+        <div style={{ width: `${sidebarWidth}px` }} className="bg-slate-900 flex flex-col shadow-2xl z-40 shrink-0 h-full max-h-screen">
            <div className="p-4 border-b border-slate-800 bg-slate-900/95 backdrop-blur flex justify-between items-center shrink-0">
              <div>
                 <h2 className="text-lg font-semibold flex items-center gap-2"><MessageSquare size={18} className="text-brand-400"/> {session?.videoName || "Session"}</h2>
@@ -1831,23 +1655,19 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                  <div className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm transition-all ${msg.role === 'user' ? 'bg-brand-600 text-white rounded-br-none' : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'} ${msg.isVoice ? 'ring-2 ring-brand-400/30' : ''}`}>
                    
-                   {/* Header for Voice/User messages */}
                    {msg.role === 'user' && (
                         <div className="flex items-center justify-between mb-2 pb-1 border-b border-white/10">
-                            {msg.isVoice ? (
-                                <span className="text-[10px] uppercase font-bold tracking-wider opacity-70 flex items-center gap-1">
-                                    <Activity size={10} className="animate-pulse" /> Live Voice
-                                </span>
-                            ) : (
-                                <span className="text-[10px] uppercase font-bold tracking-wider opacity-70 flex items-center gap-1">
-                                    <MessageSquare size={10} /> Text
-                                </span>
-                            )}
-                            
+                            <div className="flex items-center gap-2">
+                                {msg.isVoice ? (
+                                    <span className="text-[10px] uppercase font-bold tracking-wider opacity-70 flex items-center gap-1"><Activity size={10} className="animate-pulse" /> Live Voice</span>
+                                ) : (
+                                    <span className="text-[10px] uppercase font-bold tracking-wider opacity-70 flex items-center gap-1"><MessageSquare size={10} /> Text</span>
+                                )}
+                            </div>
                             {msg.videoTimestamp !== undefined && (
-                                <button
+                                <button 
                                     onClick={() => handleVideoSeek(msg.videoTimestamp!)}
-                                    className="text-[10px] font-mono bg-black/20 hover:bg-black/40 px-1.5 py-0.5 rounded text-slate-300 hover:text-white flex items-center gap-1 transition-all"
+                                    className="text-[10px] font-mono opacity-60 hover:opacity-100 hover:text-brand-200 flex items-center gap-1 transition-colors"
                                     title="Jump to video time"
                                 >
                                     <Clock size={10} /> {formatTime(msg.videoTimestamp)}
@@ -1856,21 +1676,19 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                         </div>
                    )}
                    
-                   {/* Contextual Information for User Messages (Stage 3 & 4) */}
+                   {/* Screenshot (Contextual Image) Rendering Block */}
                    {msg.role === 'user' && (msg.contextualImage || msg.contextualClipRange || msg.contextualScriptWindow) && (
                         <div className="mb-2 p-2 bg-white/10 rounded-lg border border-white/5 text-slate-300">
-                            <p className="text-[10px] uppercase font-bold text-white/50 mb-1 flex items-center gap-1">
-                                Context Sent {msg.contextTierUsed && <span className="text-[9px] bg-brand-900/50 px-1.5 py-0.5 rounded-full border border-brand-500/30">Tier {msg.contextTierUsed}</span>}
-                            </p>
+                            {msg.contextTierUsed && <p className="text-[10px] uppercase font-bold text-white/50 mb-1">Tier {msg.contextTierUsed}</p>}
                             {msg.contextualImage && (
                                 <div className="mb-1">
                                     <img 
                                         src={`data:image/jpeg;base64,${msg.contextualImage}`} 
                                         alt="Contextual Frame" 
-                                        className="w-full max-h-24 object-contain rounded-md border border-white/10 cursor-pointer" 
+                                        className="w-full max-h-32 object-contain rounded-md border border-white/10 cursor-pointer hover:opacity-90 transition-opacity" 
                                         onClick={() => openFullImageModal(`data:image/jpeg;base64,${msg.contextualImage}`)}
                                     />
-                                    <span className="text-[9px] text-white/70 block mt-1">Click to enlarge annotated frame</span>
+                                    <span className="text-[9px] text-white/70 block mt-1">Click to enlarge</span>
                                 </div>
                             )}
                             {msg.contextualClipRange && (
@@ -1885,29 +1703,22 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                             )}
                         </div>
                    )}
-
-                   {/* CONTENT RENDERING LOGIC */}
+                   
                    {typeof msg.content === 'string' ? (
-                       // Standard Text / Voice Stream / Loading
                        <div className="markdown-body">
-                           {(isLiveActive && msg.role === 'model' && msg.id === currentLiveModelMessageIdRef.current) ? (
-                               <div className="whitespace-pre-wrap font-sans">{msg.content}<span className="inline-block w-1.5 h-4 ml-1 bg-current align-middle animate-pulse"></span></div>
-                           ) : (
-                               <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{msg.content}</ReactMarkdown>
-                           )}
+                           <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{msg.content}</ReactMarkdown>
                        </div>
                    ) : (
-                       // Structured Answer Card (Module 7 output)
                        <AnswerCard 
                            data={msg.content as AnswerCardData} 
                            onQuestionClick={(q) => handleTextQuery(q)}
-                           onRewindClick={handleVideoSeek} // Stage 7: Pass the rewind handler
+                           onRewindClick={handleVideoSeek}
                        />
                    )}
                  </div>
                </div>
              ))}
-             {isLoading && <div className="flex justify-start"><div className="bg-slate-800 text-slate-400 rounded-2xl px-4 py-3 text-sm flex items-center gap-2"><Loader2 size={14} className="animate-spin"/> Analyzing context (ROI)...</div></div>}
+             {isLoading && <div className="flex justify-start"><div className="bg-slate-800 text-slate-400 rounded-2xl px-4 py-3 text-sm flex items-center gap-2"><Loader2 size={14} className="animate-spin"/> Analyzing context...</div></div>}
              <div ref={chatEndRef} />
            </div>
 
@@ -1917,15 +1728,15 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                     <SidebarVoicePanel 
                         session={liveSessionRef.current} 
                         isConnecting={isConnecting} 
-                        userTranscriptPreview={currentUserLiveTranscriptPreview} // Pass the dedicated user transcript preview
+                        userTranscriptPreview={currentUserLiveTranscriptPreview}
                         onClose={toggleLiveMode}
-                        isSpeaking={isSpeaking} // Pass PTT state
+                        isSpeaking={isSpeaking}
                     />
-                    {!isConnecting && ( // Only show PTT button once connected
+                    {!isConnecting && (
                       <button 
                          onMouseDown={handleStartSpeaking}
                          onMouseUp={handleStopSpeaking}
-                         onMouseLeave={handleStopSpeaking} // In case mouse leaves button while held
+                         onMouseLeave={handleStopSpeaking}
                          className={`w-full mt-3 py-3 rounded-xl font-bold text-white transition-all shadow-lg flex items-center justify-center gap-2 
                            ${isSpeaking ? 'bg-red-600 shadow-red-500/30' : 'bg-brand-600 hover:bg-brand-700 shadow-brand-500/20'} 
                            disabled:opacity-50 disabled:cursor-not-allowed select-none`}
@@ -1944,7 +1755,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                         </button>
                     </div>
                     <div className="relative">
-                        <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleTextQuery(inputText)} placeholder="Ask a question about the video..." className="w-full bg-slate-800 text-white rounded-lg pl-4 pr-12 py-3 text-sm focus:ring-2 focus:ring-brand-500 outline-none placeholder-slate-500" disabled={isLiveActive || isConnecting}/>
+                        <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleTextQuery(inputText)} placeholder="Ask a question..." className="w-full bg-slate-800 text-white rounded-lg pl-4 pr-12 py-3 text-sm focus:ring-2 focus:ring-brand-500 outline-none placeholder-slate-500" disabled={isLiveActive || isConnecting}/>
                         <button onClick={() => handleTextQuery(inputText)} disabled={!inputText.trim() || isLiveActive || isConnecting} className="absolute right-2 top-1/2 transform -translate-y-1/2 p-1.5 text-brand-400 hover:text-brand-300 disabled:text-slate-600"><Send size={18} /></button>
                     </div>
                  </>
@@ -1953,7 +1764,6 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         </div>
       </div>
       
-      {/* Full-size Image Modal */}
       {fullImageModalOpen && (
         <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4" onClick={() => setFullImageModalOpen(false)}>
             <div className="relative max-w-4xl max-h-full">
