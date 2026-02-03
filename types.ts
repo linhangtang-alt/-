@@ -34,7 +34,6 @@ export interface SelectionBox {
   x: number;
   y: number;
   width: number;
-  // Fix: Add 'height' property to SelectionBox interface
   height: number; 
 }
 

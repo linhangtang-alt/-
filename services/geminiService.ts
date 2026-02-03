@@ -17,7 +17,10 @@ const liveAnswerCardSummaryFunctionDeclaration: FunctionDeclaration = {
     properties: {
       title: { type: Type.STRING },
       key_points: { type: Type.ARRAY, items: { type: Type.STRING } },
-      suggested_rewind_time: { type: Type.NUMBER }
+      suggested_rewind_time: { 
+          type: Type.NUMBER,
+          description: 'An absolute timestamp in the video (in seconds) that is most relevant for rewinding to. Should be based on the provided visual context and conversation, not a relative value from the start of a clip.'
+      }
     },
     required: ['title', 'key_points']
   }
@@ -42,72 +45,108 @@ For text queries, always return a structured JSON response matching the AnswerCa
 For live audio interactions, be conversational, brief, and encouraging.
 If the user speaks a language other than English (e.g., Chinese), first provide an English translation of their query labeled 'Translation:', then answer in the user's language.`;
 
+const MAX_ATTEMPTS = 3;
+const INITIAL_BACKOFF_MS = 1500; // Increased initial wait
+
 /**
  * Orchestrates the Q&A process by sending a query and context to Gemini.
  * Uses gemini-3-pro-preview for complex reasoning and structured output.
+ * Implements fallback to gemini-3-flash-preview if Pro is rate-limited.
  */
 export const orchestrateQnA = async (
   query: string,
   context: ContextData,
   semanticData?: SemanticVideoData
 ): Promise<{ answer: AnswerCardData, finalTier: ContextTier }> => {
-  const ai = new GoogleGenAI({ apiKey: API_KEY || '' });
   
-  const prompt = `
-    User Query: ${query}
-    Current Timestamp: ${context.timestamp}s
-    Context Tier: ${context.currentTier}
-    
-    Video Semantic Data: ${JSON.stringify(semanticData)}
-    Contextual Bundle: ${JSON.stringify(context.contextualBundle)}
-  `;
+  // Logic: Try Pro first, if it fails after 3 retries, try Flash as last resort.
+  const modelsToTry = ['gemini-3-pro-preview', 'gemini-3-flash-preview'];
+  
+  for (const modelName of modelsToTry) {
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const ai = new GoogleGenAI({ apiKey: API_KEY || '' });
+        
+        const prompt = `
+          User Query: ${query}
+          Current Timestamp: ${context.timestamp}s
+          Context Tier: ${context.currentTier}
+          
+          Video Semantic Data: ${JSON.stringify(semanticData)}
+          Contextual Bundle: ${JSON.stringify(context.contextualBundle)}
+        `;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
-    contents: prompt,
-    config: {
-      systemInstruction: VIDEO_TUTOR_SYSTEM_INSTRUCTION,
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING },
-          answer: { type: Type.STRING },
-          key_terms: {
-            type: Type.ARRAY,
-            items: {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: prompt,
+          config: {
+            systemInstruction: VIDEO_TUTOR_SYSTEM_INSTRUCTION,
+            responseMimeType: 'application/json',
+            responseSchema: {
               type: Type.OBJECT,
               properties: {
-                term: { type: Type.STRING },
-                definition: { type: Type.STRING }
-              }
+                title: { type: Type.STRING },
+                answer: { type: Type.STRING },
+                key_terms: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      term: { type: Type.STRING },
+                      definition: { type: Type.STRING }
+                    }
+                  }
+                },
+                confidence: { type: Type.NUMBER },
+                suggested_followups: { type: Type.ARRAY, items: { type: Type.STRING } },
+                needs_more_context: { type: Type.BOOLEAN },
+                suggested_context_tier: { type: Type.STRING },
+                suggested_rewind_time: { 
+                    type: Type.NUMBER,
+                    description: 'An absolute timestamp in the video (in seconds) that is most relevant for rewinding to. Base this on "Current Timestamp".'
+                }
+              },
+              required: ['title', 'answer']
             }
-          },
-          confidence: { type: Type.NUMBER },
-          suggested_followups: { type: Type.ARRAY, items: { type: Type.STRING } },
-          needs_more_context: { type: Type.BOOLEAN },
-          suggested_context_tier: { type: Type.STRING },
-          suggested_rewind_time: { type: Type.NUMBER }
-        },
-        required: ['title', 'answer']
+          }
+        });
+
+        const text = response.text;
+        const answer = JSON.parse(text || '{}');
+        return {
+            answer,
+            finalTier: context.currentTier || ContextTier.S
+        };
+      } catch (e: any) {
+        const errorStr = e.toString().toLowerCase();
+        const isRateLimitError = errorStr.includes('429') || 
+                                 errorStr.includes('resource_exhausted') || 
+                                 errorStr.includes('quota');
+
+        console.warn(`[GeminiService] ${modelName} attempt ${attempt} failed:`, e);
+
+        if (isRateLimitError && attempt < MAX_ATTEMPTS) {
+          const backoffTime = INITIAL_BACKOFF_MS * (2 ** (attempt - 1));
+          await new Promise(resolve => setTimeout(resolve, backoffTime));
+          continue; // Retry same model
+        } 
+        
+        // If it's a rate limit error but we hit MAX_ATTEMPTS for Pro, 
+        // the outer loop will move to the next model (Flash).
+        if (isRateLimitError && modelName !== modelsToTry[modelsToTry.length - 1]) {
+           console.log(`[GeminiService] Primary model ${modelName} exhausted. Falling back to next model...`);
+           break; // Break inner loop to try next model
+        }
+
+        // If it's a non-rate-limit error OR we're on our last model, throw
+        if (!isRateLimitError || modelName === modelsToTry[modelsToTry.length - 1]) {
+           throw new Error(isRateLimitError ? "RATE_LIMIT_EXCEEDED" : "API_ERROR");
+        }
       }
     }
-  });
-
-  try {
-    const text = response.text;
-    const answer = JSON.parse(text || '{}');
-    return {
-        answer,
-        finalTier: context.currentTier || ContextTier.S
-    };
-  } catch (e) {
-    console.error("Failed to parse AI response", e);
-    return {
-        answer: { title: "Analysis Error", answer: "I encountered an error analyzing this segment." },
-        finalTier: context.currentTier || ContextTier.S
-    };
   }
+
+  throw new Error("Failed to process request with all available models.");
 };
 
 // --- Audio Encoding/Decoding Helpers ---
@@ -208,9 +247,8 @@ export class LiveSession {
       model: 'gemini-2.5-flash-native-audio-preview-12-2025',
       callbacks: {
         onopen: () => {
-          // Do not start audio stream automatically, wait for PTT
           this.inputAudioEnabled = false;
-          this.startAudioStream(); // Initialize context but don't send data yet
+          this.startAudioStream();
         },
         onmessage: (message: LiveServerMessage) => this.handleMessage(message),
         onclose: () => {
@@ -229,8 +267,6 @@ export class LiveSession {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
         },
         systemInstruction: systemInstruction,
-        // ENABLED: Transcription for User Input so we can show it in chat
-        // Fixed: Use empty object as per documentation, do not pass model name here
         inputAudioTranscription: {}, 
         tools: [{ functionDeclarations: [liveAnswerCardSummaryFunctionDeclaration] }]
       },
@@ -239,9 +275,7 @@ export class LiveSession {
     await this.sessionPromise;
   }
 
-  // Handle model messages including audio chunks
   private async handleMessage(message: LiveServerMessage) {
-    // 1. Process Audio Output (Sound)
     if (message.serverContent?.modelTurn?.parts[0]?.inlineData?.data) {
         const base64EncodedAudioString = message.serverContent.modelTurn.parts[0].inlineData.data;
         if (this.outputAudioContext) {
@@ -262,10 +296,8 @@ export class LiveSession {
         }
     }
 
-    // 2. Process Transcriptions (Text for Chat UI)
     const serverContent = message.serverContent;
     if (serverContent) {
-        // User Input Transcript
         if (serverContent.inputTranscription) {
             this.onMessageCallback({
                 text: serverContent.inputTranscription.text,
@@ -275,7 +307,6 @@ export class LiveSession {
             });
         }
 
-        // Model Output Transcript (if any text is sent along with audio, or tool calls)
         if (serverContent.modelTurn) {
             for (const part of serverContent.modelTurn.parts) {
                 if (part.text) {
@@ -292,18 +323,15 @@ export class LiveSession {
             }
         }
 
-        // Handle Turn Completion
         if (serverContent.turnComplete) {
-            // Signal completion for user preview clearing
             this.onMessageCallback({
                 isUser: true, 
                 messageId: this.getCurrentInputMessageId(),
                 isTurnComplete: true,
                 text: ''
             });
-            this.currentInputMessageId = null; // Reset user ID for next phrase
+            this.currentInputMessageId = null; 
             
-            // If model turn complete
             if (this.currentModelMessageId) {
                  this.onMessageCallback({
                     isUser: false,
@@ -316,11 +344,9 @@ export class LiveSession {
         }
     }
 
-    // 3. Process Tool Calls (Structured Data)
     if (message.toolCall) {
       for (const fc of message.toolCall.functionCalls) {
         if (fc.name === 'summarizeLiveResponse') {
-          // Pass the structured summary to the UI
           if (!this.currentModelMessageId) {
               this.currentModelMessageId = Date.now().toString();
           }
@@ -331,7 +357,6 @@ export class LiveSession {
               isTurnComplete: true 
           });
 
-          // Respond to the model that we handled it
           this.sessionPromise?.then(session => {
             session.sendToolResponse({
               functionResponses: {
@@ -346,7 +371,6 @@ export class LiveSession {
     }
   }
 
-  // Stream microphone audio to Gemini
   private startAudioStream() {
     if (!this.inputAudioContext || !this.mediaStream) return;
     
@@ -357,7 +381,6 @@ export class LiveSession {
         if (!this.inputAudioEnabled) return;
         const inputData = e.inputBuffer.getChannelData(0);
         const pcmBlob = this.createBlob(inputData);
-        // Ensure data is sent only after session resolves
         this.sessionPromise?.then(session => {
             session.sendRealtimeInput({ media: pcmBlob });
         });

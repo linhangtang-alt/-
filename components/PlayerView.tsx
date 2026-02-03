@@ -770,7 +770,7 @@ const SidebarVoicePanel: React.FC<SidebarVoicePanelProps> = ({ session, isConnec
 
             <div className="relative z-10 flex flex-col items-center justify-center py-1 min-h-[80px]">
                  <div 
-                    className={`relative w-12 h-12 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(99,102,241,0.3)] transition-all duration-300 border 
+                    className={`relative w-12 h-12 rounded-full flex items-center justify-center shadow-[0_0_20_rgba(99,102,241,0.3)] transition-all duration-300 border 
                     ${isConnecting ? 'bg-slate-800 border-slate-700' : 'bg-gradient-to-br from-indigo-600 to-purple-700 border-indigo-400/50'}`}
                     style={{ transform: `scale(${1 + Math.min(aiVol * 0.5, 0.2)})` }}
                  >
@@ -927,6 +927,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>(session?.chatHistory || []);
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   
   const [isLiveActive, setIsLiveActive] = useState(false);
@@ -1011,7 +1012,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
 
   useEffect(() => {
     if (session) setChatHistory(session.chatHistory);
-  }, [session?.id]);
+  }, [session]);
 
   useEffect(() => {
     if (session && chatHistory !== session.chatHistory) {
@@ -1320,32 +1321,51 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     setChatHistory(prev => [...prev, optimisticUserMessage]);
     setInputText("");
     setDrawingPoints([]);
-
     setIsLoading(true);
+    setIsRetrying(false);
 
-    const { answer: responseData, finalTier } = await orchestrateQnA( // This function might need adaptation in geminiService to match signature, assuming it handles context policy internally or simplified here
-      queryText,
-      // For simplicity in this revert, passing basic context, ignoring full tier policy complexity for now or assuming orchestrateQnA handles it
-      { ...commonContext, currentTier: ContextTier.S, contextualBundle: allContextBundles[ContextTier.S] },
-      semanticData
-    );
+    try {
+      const { answer: responseData, finalTier } = await orchestrateQnA(
+        queryText,
+        { ...commonContext, currentTier: ContextTier.S, contextualBundle: allContextBundles[ContextTier.S] },
+        semanticData
+      );
 
-    setIsLoading(false);
-    
-    setChatHistory(prev => {
-        const updatedHistory = prev.map(msg => 
-            msg.id === userMsgId 
-            ? { ...msg, contextTierUsed: finalTier, contextualClipRange: allContextBundles[finalTier || ContextTier.S].clipRange, contextualScriptWindow: allContextBundles[finalTier || ContextTier.S].scriptWindow }
-            : msg
-        );
+      setChatHistory(prev => {
+          const updatedHistory = prev.map(msg => 
+              msg.id === userMsgId 
+              ? { ...msg, contextTierUsed: finalTier, contextualClipRange: allContextBundles[finalTier || ContextTier.S].clipRange, contextualScriptWindow: allContextBundles[finalTier || ContextTier.S].scriptWindow }
+              : msg
+          );
 
-        return [...updatedHistory, {
+          return [...updatedHistory, {
+              id: (Date.now() + 1).toString(),
+              role: 'model',
+              content: responseData, 
+              timestamp: Date.now()
+          }];
+      });
+    } catch (error: any) {
+        const errorMessage: AnswerCardData = {
+            title: "An Error Occurred",
+            answer: "Sorry, I couldn't process that request. Please try again in a moment."
+        };
+        
+        if (error.message === 'RATE_LIMIT_EXCEEDED') {
+            errorMessage.title = "Rate Limit Exceeded";
+            errorMessage.answer = "You're sending requests too quickly! Please wait a moment before asking another question.";
+        }
+        
+        setChatHistory(prev => [...prev, {
             id: (Date.now() + 1).toString(),
             role: 'model',
-            content: responseData, 
+            content: errorMessage,
             timestamp: Date.now()
-        }];
-    });
+        }]);
+    } finally {
+        setIsLoading(false);
+        setIsRetrying(false);
+    }
   };
 
   const handleStartSpeaking = () => {
@@ -1718,7 +1738,14 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                  </div>
                </div>
              ))}
-             {isLoading && <div className="flex justify-start"><div className="bg-slate-800 text-slate-400 rounded-2xl px-4 py-3 text-sm flex items-center gap-2"><Loader2 size={14} className="animate-spin"/> Analyzing context...</div></div>}
+             {isLoading && (
+                <div className="flex justify-start">
+                    <div className="bg-slate-800 text-slate-400 rounded-2xl px-4 py-3 text-sm flex items-center gap-2">
+                        <Loader2 size={14} className="animate-spin"/> 
+                        {isRetrying ? "System recovering, retrying..." : "Analyzing context..."}
+                    </div>
+                </div>
+             )}
              <div ref={chatEndRef} />
            </div>
 
