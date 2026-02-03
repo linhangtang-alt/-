@@ -1352,8 +1352,8 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
         };
         
         if (error.message === 'RATE_LIMIT_EXCEEDED') {
-            errorMessage.title = "Rate Limit Exceeded";
-            errorMessage.answer = "You're sending requests too quickly! Please wait a moment before asking another question.";
+            errorMessage.title = "Quota Limit Exceeded";
+            errorMessage.answer = "All available model tiers are currently quota-limited. This often resets every minute. Please wait 60 seconds and try again.";
         }
         
         setChatHistory(prev => [...prev, {
@@ -1742,7 +1742,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                 <div className="flex justify-start">
                     <div className="bg-slate-800 text-slate-400 rounded-2xl px-4 py-3 text-sm flex items-center gap-2">
                         <Loader2 size={14} className="animate-spin"/> 
-                        {isRetrying ? "System recovering, retrying..." : "Analyzing context..."}
+                        {isRetrying ? "Switching to backup tier..." : "Analyzing context..."}
                     </div>
                 </div>
              )}

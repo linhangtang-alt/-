@@ -46,12 +46,11 @@ For live audio interactions, be conversational, brief, and encouraging.
 If the user speaks a language other than English (e.g., Chinese), first provide an English translation of their query labeled 'Translation:', then answer in the user's language.`;
 
 const MAX_ATTEMPTS = 3;
-const INITIAL_BACKOFF_MS = 1500; // Increased initial wait
+const INITIAL_BACKOFF_MS = 3000; // Increased to 3s for better quota recovery window
 
 /**
  * Orchestrates the Q&A process by sending a query and context to Gemini.
- * Uses gemini-3-pro-preview for complex reasoning and structured output.
- * Implements fallback to gemini-3-flash-preview if Pro is rate-limited.
+ * Uses a tiered fallback system to handle the 429 Resource Exhausted errors.
  */
 export const orchestrateQnA = async (
   query: string,
@@ -59,8 +58,13 @@ export const orchestrateQnA = async (
   semanticData?: SemanticVideoData
 ): Promise<{ answer: AnswerCardData, finalTier: ContextTier }> => {
   
-  // Logic: Try Pro first, if it fails after 3 retries, try Flash as last resort.
-  const modelsToTry = ['gemini-3-pro-preview', 'gemini-3-flash-preview'];
+  // Extreme Fallback Strategy: Pro 3 -> Flash 3 -> Flash Stable -> Flash Lite Stable
+  const modelsToTry = [
+    'gemini-3-pro-preview', 
+    'gemini-3-flash-preview', 
+    'gemini-flash-latest', 
+    'gemini-flash-lite-latest'
+  ];
   
   for (const modelName of modelsToTry) {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -103,7 +107,7 @@ export const orchestrateQnA = async (
                 suggested_context_tier: { type: Type.STRING },
                 suggested_rewind_time: { 
                     type: Type.NUMBER,
-                    description: 'An absolute timestamp in the video (in seconds) that is most relevant for rewinding to. Base this on "Current Timestamp".'
+                    description: 'An absolute timestamp in the video (in seconds) that is most relevant for rewinding to.'
                 }
               },
               required: ['title', 'answer']
@@ -123,22 +127,22 @@ export const orchestrateQnA = async (
                                  errorStr.includes('resource_exhausted') || 
                                  errorStr.includes('quota');
 
-        console.warn(`[GeminiService] ${modelName} attempt ${attempt} failed:`, e);
+        console.warn(`[GeminiService] ${modelName} (Attempt ${attempt}) failed:`, errorStr);
 
         if (isRateLimitError && attempt < MAX_ATTEMPTS) {
-          const backoffTime = INITIAL_BACKOFF_MS * (2 ** (attempt - 1));
+          // Add random jitter to prevent synchronized retries
+          const jitter = Math.random() * 1000 - 500; 
+          const backoffTime = (INITIAL_BACKOFF_MS * (2 ** (attempt - 1))) + jitter;
+          console.log(`[GeminiService] Quota hit. Waiting ${Math.round(backoffTime)}ms...`);
           await new Promise(resolve => setTimeout(resolve, backoffTime));
-          continue; // Retry same model
+          continue; 
         } 
         
-        // If it's a rate limit error but we hit MAX_ATTEMPTS for Pro, 
-        // the outer loop will move to the next model (Flash).
         if (isRateLimitError && modelName !== modelsToTry[modelsToTry.length - 1]) {
-           console.log(`[GeminiService] Primary model ${modelName} exhausted. Falling back to next model...`);
-           break; // Break inner loop to try next model
+           console.log(`[GeminiService] Exhausted all retries for ${modelName}. Trying next model tier...`);
+           break; // Move to next model in modelsToTry
         }
 
-        // If it's a non-rate-limit error OR we're on our last model, throw
         if (!isRateLimitError || modelName === modelsToTry[modelsToTry.length - 1]) {
            throw new Error(isRateLimitError ? "RATE_LIMIT_EXCEEDED" : "API_ERROR");
         }
