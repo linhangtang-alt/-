@@ -716,6 +716,7 @@ interface PlayerViewProps {
 interface Point { x: number; y: number; }
 
 const DEFAULT_VIDEO = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
+const PLAYBACK_RATES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
 const formatTime = (seconds: number) => {
   if (!seconds || isNaN(seconds)) return "0:00";
@@ -919,6 +920,7 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   const [videoSrc, setVideoSrc] = useState(DEFAULT_VIDEO);
   const [isHudOpen, setIsHudOpen] = useState(true);
   const [hudPosition, setHudPosition] = useState<{x: number, y: number} | null>(null);
+  const [playbackRate, setPlaybackRate] = useState(1.0);
   
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawingPoints, setDrawingPoints] = useState<Point[]>([]); 
@@ -1044,6 +1046,12 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
     return () => cancelAnimationFrame(animationFrameId);
   }, [isPlaying]);
 
+  useEffect(() => {
+      if (videoRef.current) {
+          videoRef.current.playbackRate = playbackRate;
+      }
+  }, [playbackRate]);
+
   const handleChatScroll = () => {
       const container = chatContainerRef.current;
       if (!container) return;
@@ -1126,6 +1134,12 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
   const toggleMute = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     setIsMuted(!isMuted);
+  };
+
+  const cyclePlaybackRate = () => {
+      const currentIndex = PLAYBACK_RATES.indexOf(playbackRate);
+      const nextIndex = (currentIndex + 1) % PLAYBACK_RATES.length;
+      setPlaybackRate(PLAYBACK_RATES[nextIndex]);
   };
 
   const toggleDrawingMode = () => {
@@ -1643,6 +1657,17 @@ const PlayerView: React.FC<PlayerViewProps> = ({ onNavigate, session, onUpdateSe
                  <div className="w-20 flex items-center">
                      <input type="range" min="0" max="1" step="0.05" value={isMuted ? 0 : volume} onChange={handleVolumeChange} className="w-full h-1 bg-slate-600 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:bg-brand-500 hover:[&::-webkit-slider-thumb]:bg-brand-400 transition-all"/>
                  </div>
+             </div>
+
+             <div className="flex items-center gap-1 group/speed relative">
+                <button 
+                    onClick={cyclePlaybackRate} 
+                    className="text-white hover:text-brand-400 transition-colors p-1.5 rounded-lg hover:bg-white/5 flex items-center gap-1.5 border border-transparent hover:border-white/10 active:scale-95 transition-all"
+                    title="Cycle Playback Speed"
+                >
+                    <Gauge size={20}/>
+                    <span className="text-[10px] font-bold w-8 text-left">{playbackRate}x</span>
+                </button>
              </div>
              
              <button onClick={() => setShowSubtitles(!showSubtitles)} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${showSubtitles ? 'bg-brand-600 text-white shadow-lg' : 'bg-white/10 text-slate-300 hover:bg-white/20'}`}>
